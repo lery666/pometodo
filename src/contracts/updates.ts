@@ -1,4 +1,4 @@
-/** Native update contract owned by Codex. UI implementation belongs to GLM. */
+/** Data contract between the update interface and native update service. */
 export interface UpdateRelease {
   version: string;
   releaseNotes: string;

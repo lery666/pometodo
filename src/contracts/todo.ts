@@ -1,5 +1,5 @@
 /**
- * PomeTodo UI / 主控接口 v1。由 Codex 维护，ZCode 本批任务只读。
+ * PomeTodo 界面与原生待办服务的数据接口。
  * 日期是 ISO 时间字符串；表单显示时按本地日历转换，dueAt 可为 null。
  * attachmentPaths 由原生服务发放，UI 将其作为不透明标识传回服务。
  */

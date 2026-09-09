@@ -1,4 +1,4 @@
-/** 第二批设置界面固定合同 v1。主控维护；页面不得直接调用系统或保存秘密。 */
+/** 设置页面与原生服务的数据接口；页面不直接调用系统或保存凭据。 */
 export type SettingsTheme = "system" | "light" | "dark";
 export type AiProvider = "deepseek" | "qwen" | "glm";
 export type DirectoryKind = "data" | "screenshots";
