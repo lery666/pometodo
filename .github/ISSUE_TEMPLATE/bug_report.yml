@@ -1,0 +1,22 @@
+name: 使用问题
+description: 告诉我们已经观察到的现象，无需额外测试
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: "请只提供已有现象，不需要重复复现、切换系统设置或安装调试包。不要填写真实任务、客户信息、密钥或付款资料。"
+  - type: textarea
+    id: observation
+    attributes:
+      label: 发生了什么
+      description: 当时想做什么，实际看到了什么？请使用不含私人信息的描述。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本（知道时填写）
+  - type: input
+    id: system
+    attributes:
+      label: 系统情况（已经知道的信息即可）
