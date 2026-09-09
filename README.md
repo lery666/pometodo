@@ -2,9 +2,9 @@
 
 Windows 上的轻量待办工具：记录任务、日期、备注和截图，用 AI 把粘贴内容整理成待办草稿。
 
-公开客户端源码，方便你按自己的习惯修改界面、添加功能，做一款适合自己的待办工具。
+公开源码方便你按自己的习惯修改界面、添加功能，做一款适合自己的待办工具。
 
-[下载安装包](https://www.shiliux.com/) · [开发指南](docs/DEVELOPMENT.md) · [已知问题与版本](docs/STATUS.md)
+[安装包发布页](https://github.com/ShiliuX-Team/pometodo/releases) · [ShiliuX 官网](https://www.shiliux.com/) · [开发指南](docs/DEVELOPMENT.md) · [项目状态](docs/STATUS.md)
 
 ## 能做什么
 
@@ -12,29 +12,29 @@ Windows 上的轻量待办工具：记录任务、日期、备注和截图，用
 - 用文字或截图进行 AI 整理，核对草稿后再保存。
 - 支持工作、生活、学习场景，以及浮球快捷入口。
 
-本地待办免费、免登录。AI 可选自带 API Key 或官方服务；官方服务独立提供，使用条件见 ShiliuX 官网及客户端。
+**本仓库的软件免登录，没有官方账户模块。** 本地待办可直接使用；AI 整理填写自己的 API Key，支持 DeepSeek、千问和智谱。需要官方账户与 AI 服务，可使用 ShiliuX 官网提供的安装包；官网版也支持自带 Key。
 
-## 自己运行和修改
+## 下载或修改
 
-面向 Windows 10 / 11 x64。先准备 Node.js 22、pnpm 11、Rust 和 Windows 构建工具，具体见[开发环境](docs/DEVELOPMENT.md#开发环境)。
+只想使用软件，请在发布页查找 Windows 安装包；是否已提供及当前版本见[项目状态](docs/STATUS.md)。GitHub 的“Download ZIP”下载的是源码，解压后不能直接当作软件运行。
 
-下载本仓库源码并解压，在项目根目录运行：
+想修改源码，先准备 Node.js 22、pnpm 11、Rust 和 Windows 构建工具，具体见[开发环境](docs/DEVELOPMENT.md#开发环境)，然后在项目根目录运行：
 
 ```powershell
 corepack pnpm install --frozen-lockfile
 corepack pnpm tauri dev
 ```
 
-本地待办和自带 Key 模式不需要官方账号，也不需要作者的服务器或模型密钥。调试版使用独立数据目录；修改入口与测试命令见[开发指南](docs/DEVELOPMENT.md)。
+调试版使用独立数据目录。常用修改入口与检查命令见[开发指南](docs/DEVELOPMENT.md)。
 
-## 数据与官方服务
+## 数据与范围
 
-任务和附件保存在本机。使用云端 AI 会发送待整理文字；官方 AI 整理截图时还会上传处理后的截图，自带 Key 模式则先在本机识别图片文字。客户端启动时会检查官网更新。详情见[数据与网络](docs/DEVELOPMENT.md#数据与网络)。
+任务和附件保存在本机。使用 AI 时，文字或处理后的截图会发送给你选择的服务商，费用由自己的服务商账户承担；图片直传失败时回退 Windows OCR 文字识别。客户端启动时检查更新。详情见[数据与网络](docs/DEVELOPMENT.md#数据与网络)。
 
-本仓库包含客户端的登录、次数显示和服务请求代码，**不包含网关后台、真实账号数据、用户资料或服务密钥**。当前只提供 Windows 客户端，手机版与跨设备同步尚未交付。
+当前公开源码不含官方账户实现、网关后台、服务密钥或真实用户资料。早期公开版本及其许可保留在历史记录中。手机版与跨设备同步尚未交付。
 
 ## 许可与参与
 
-采用 [GPL-3.0-only](LICENSE)，允许使用、修改和商业分发；分发受 GPL 覆盖的程序时，须按许可证提供对应源码并保留必要声明。第三方许可、品牌与官方服务范围见[版权说明](docs/NOTICE.md)。
+采用 [GPL-3.0-only](LICENSE)，允许使用、修改和商业分发；分发受 GPL 覆盖的程序时，须按许可证提供对应源码并保留必要声明。第三方许可和品牌范围见[版权说明](docs/NOTICE.md)。
 
 你可以只在自己电脑上修改使用，也可以按[参与指南](.github/CONTRIBUTING.md)提交改进。安全问题请按[安全反馈说明](.github/SECURITY.md)私下报告。

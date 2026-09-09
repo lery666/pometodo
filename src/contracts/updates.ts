@@ -7,7 +7,7 @@ export interface UpdateRelease {
 
 export interface UpdateCheck {
   currentVersion: string;
-  channel: "standalone" | "store";
+  channel: "standalone" | "byok" | "store";
   available: boolean;
   release: UpdateRelease | null;
 }

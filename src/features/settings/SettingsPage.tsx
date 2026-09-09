@@ -677,7 +677,7 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
         )}
 
         <SettingsGroup title={settingsTexts.smartArrangeGroup} collapsible open={groupOpen("smartArrange", true)} onOpenChange={(open) => setGroupOpen("smartArrange", open)} highlight={smartArrangeFocusActive} groupRef={smartArrangeRef}>
-          <SmartArrangeSection snapshot={smartArrange?.snapshot ?? null} busy={interactionBusy} onChange={(preferences) => smartArrange?.onChange(preferences)}>
+          <SmartArrangeSection officialServicesEnabled={smartArrange?.officialServicesEnabled} snapshot={smartArrange?.snapshot ?? null} busy={interactionBusy} onChange={(preferences) => smartArrange?.onChange(preferences)}>
             <AiKeySection
               provider={settings.aiProvider}
               keyConfigured={snapshot.keyConfigured}

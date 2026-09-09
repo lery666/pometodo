@@ -108,7 +108,16 @@ fn extract_with_user_key(
     key: &str,
     text: &str,
     context: &ExtractionContext,
+    vision: Option<&[String]>,
 ) -> Result<Option<ParsedExtraction>, String> {
+    if let Some(images) = vision {
+        // 视觉直传：AI 直接看图（与官方同思路，准确率最高）；失败由调用方退回 OCR 文本。
+        let messages = crate::ai_extract::build_vision_messages(text, context).map_err(|error| error.to_string())?;
+        static HTTP_VISION: OnceLock<Result<AiHttp, crate::ai_http::AiHttpError>> = OnceLock::new();
+        let content = HTTP_VISION.get_or_init(AiHttp::new).as_ref().map_err(ToString::to_string)?
+            .complete_vision(provider, key, &messages, images).map_err(|error| error.to_string())?;
+        return crate::ai_extract::parse_response(&content, context).map(Some).map_err(|error| error.to_string());
+    }
     extract_text(text, context, |messages| {
         static HTTP: OnceLock<Result<AiHttp, crate::ai_http::AiHttpError>> = OnceLock::new();
         HTTP.get_or_init(AiHttp::new)
@@ -596,6 +605,57 @@ mod tests {
     }
 
     #[test]
+    fn byok_vision_sends_image_first_and_never_ocrs() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap();
+        let parsed = ParsedExtraction {
+            customer_name: Some("虚构客户".into()),
+            title: Some("核对初稿".into()),
+            note: None,
+            received_at: None,
+            due_at: None,
+            warnings: vec![],
+        };
+        let result = arrange_clipboard(
+            || Ok(("qwen".into(), "byok-key".into())),
+            || Ok(ClipboardInput { text: String::new(), attachment: Some("img".into()) }),
+            |_| panic!("视觉直传成功时不得使用本地 OCR"),
+            |id| { assert_eq!(id, "img"); Ok(vec!["BASE64PNG".into()]) },
+            |_, _, _, _, vision| {
+                assert_eq!(vision, Some(&["BASE64PNG".to_string()][..]));
+                Ok(Some(parsed.clone()))
+            },
+            now,
+        ).unwrap();
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["kind"], "ai");
+        assert_eq!(value["draft"]["title"], "核对初稿");
+    }
+
+    #[test]
+    fn byok_vision_failure_falls_back_to_ocr_text_without_image() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap();
+        let mut calls = 0;
+        let result = arrange_clipboard(
+            || Ok(("glm".into(), "byok-key".into())),
+            || Ok(ClipboardInput { text: String::new(), attachment: Some("img".into()) }),
+            |_| {
+                let mut document = crate::local_extract::LocalDocument::default();
+                document.text = "虚构客户：请核对初稿".into();
+                Ok(document)
+            },
+            |_| Err("模型无视觉权限".into()),
+            |_, _, _, _, vision| {
+                calls += 1;
+                assert!(vision.is_none(), "降级路径不带图");
+                Ok(Some(ParsedExtraction { customer_name: None, title: Some("核对初稿".into()), note: None, received_at: None, due_at: None, warnings: vec![] }))
+            },
+            now,
+        ).unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(serde_json::to_value(result).unwrap()["draft"]["title"], "核对初稿");
+    }
+
+    #[test]
     fn rejected_selection_never_reads_clipboard_ocr_or_model() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap();
         let result = arrange_clipboard(
@@ -662,7 +722,11 @@ mod tests {
                         document.text = "虚构客户：请核对初稿".into();
                         Ok(document)
                     },
-                    |_| Ok(vec!["synthetic-base64-png".into()]),
+                    |_| {
+                        // 视觉模型对中转/无视觉 key 可能失败：降级 OCR 文本路径（本用例专测降级）。
+                        assert!(image_input);
+                        Err("vision_not_available".into())
+                    },
                     |selected, key, text, context, _vision| {
                         assert_eq!(selected, provider);
                         assert_eq!(
@@ -773,12 +837,18 @@ fn arrange_clipboard(
                         Err(error) => Err(format!("截图无法识别：{error}，请重试或换更清晰的截图")),
                     }
                 } else {
-                    match ocr(id) {
-                        Ok(document) => {
-                            let text = truncate_document(&document.text);
-                            complete(&provider, &key, &text, &context, None)
-                        }
-                        Err(error) => Err(error),
+                    // 自带 Key：视觉直传优先（AI 直接识图）；任何失败回退 OCR 文本（兼容无视觉模型/中转 key）。
+                    let vision_result = vision(id)
+                        .and_then(|images| complete(&provider, &key, "", &context, Some(&images)));
+                    match vision_result {
+                        Ok(value) => Ok(value),
+                        Err(_) => match ocr(id) {
+                            Ok(document) => {
+                                let text = truncate_document(&document.text);
+                                complete(&provider, &key, &text, &context, None)
+                            }
+                            Err(error) => Err(error),
+                        },
                     }
                 }
             }
@@ -847,7 +917,7 @@ fn run_recognition(
         let guard = state.inner.lock().map_err(|_| "无法读取智能整理设置")?;
         let storage = guard.as_ref().map_err(Clone::clone)?;
         (
-            storage.repo.smart_arrange_preferences()?,
+            crate::distribution::effective_preferences(storage.repo.smart_arrange_preferences()?),
             storage.profile_directory.clone(),
         )
     };
@@ -855,9 +925,9 @@ fn run_recognition(
         || {
             crate::smart_arrange::require_enabled(&preferences)?;
             if preferences.source == pometodo_core::smart_arrange::SmartArrangeSource::Official {
-                let status = crate::official::available(&root)?;
-                if !status.available {
-                    return Err(status.message);
+                let (available, message) = crate::service_extension::available(&root)?;
+                if !available {
+                    return Err(message);
                 }
                 return Ok(("official".into(), String::new()));
             }
@@ -892,9 +962,9 @@ fn run_recognition(
         },
         |provider, key, text, context, vision| {
             let result = if provider == "official" {
-                crate::official::extract(&root, text, context, vision)
+                crate::service_extension::extract(&root, text, context, vision)
             } else {
-                extract_with_user_key(provider, key, text, context)
+                extract_with_user_key(provider, key, text, context, vision)
             };
             // 图片整理失败时给出更具体的引导；网络等其他失败保持原提示。
             result.map_err(|error| {

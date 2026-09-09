@@ -68,6 +68,7 @@ async fn with_mutation<T: Send + 'static>(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
+    service_mode: &'static str,
     data_directory: String,
     theme: String,
     version: String,
@@ -83,6 +84,7 @@ pub async fn pometodo_app_info(app: tauri::AppHandle) -> Result<AppInfo, String>
     with_storage(app, move |storage| {
         let settings = storage.repo.settings()?;
         Ok(AppInfo {
+            service_mode: crate::distribution::SERVICE_MODE,
             data_directory: storage.locations.data_directory.display().to_string(),
             theme: settings.theme,
             quick_due_options: settings.quick_due_options,

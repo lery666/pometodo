@@ -52,7 +52,7 @@ export default function UpdatePanel({ controller, canInstall, onBack }: UpdatePa
               </div>}
               {state.download === "ready" && <>
                 <button className="update-button update-primary" type="button" disabled={!canInstall || state.installing} onClick={() => controller.install()}>{state.installing ? "正在启动安装器…" : "立即安装"}</button>
-                {!canInstall && !state.installing && <p className="update-hint" role="status">请先结束当前操作（保存或关闭待办、登录或付款）再安装。</p>}
+                {!canInstall && !state.installing && <p className="update-hint" role="status">请先保存或关闭待办，并等待当前操作结束后再安装。</p>}
                 {state.installing && <p className="update-hint" role="status">更新后自动打开。</p>}
               </>}
               {state.download === "failed" && <button className="update-button update-primary" type="button" onClick={() => controller.download()}>重试下载</button>}

@@ -11,7 +11,7 @@ import { wordPackFor } from "../wordPacks";
 import TodoCalendar, { shiftCalendarMonth } from "./TodoCalendar";
 import { todoIcons } from "./TodoIcons";
 import CustomerInput from "./CustomerInput";
-import type { SmartArrangeEntryTone } from "../../official/smartArrangeEntry";
+import type { SmartArrangeEntryTone } from "../../../extensions/types";
 
 /** 智能整理按钮的三档视觉权重；整理中保持尺寸只加禁用。 */
 export function smartArrangeToneClass(tone: SmartArrangeEntryTone | undefined): string {

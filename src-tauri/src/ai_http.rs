@@ -76,6 +76,28 @@ fn request_body(provider: &str, messages: &PromptMessages) -> Result<Value, AiHt
     Ok(value)
 }
 
+/// 视觉直传请求体：各家视觉模型（OpenAI 兼容 image_url）；模型名取官方视觉档，
+/// 参数尽量少（不附加 JSON 模式与思考开关，避免视觉模型不支持的字段）。
+fn request_vision_body(provider: &str, messages: &PromptMessages, images: &[String]) -> Result<Value, AiHttpError> {
+    let (model, limit) = match provider {
+        "deepseek" => ("deepseek-v4-flash-vision-exp", 2048),
+        "qwen" => ("qwen-vl-max", 2048),
+        "glm" => ("glm-4.5v", 4096),
+        _ => return Err(AiHttpError::UnknownProvider),
+    };
+    let mut user_content: Vec<Value> = vec![json!({"type":"text","text":messages.user})];
+    for image in images {
+        user_content.push(json!({
+            "type":"image_url",
+            "image_url":{"url": format!("data:image/png;base64,{image}")}
+        }));
+    }
+    Ok(json!({
+        "model":model, "stream":false, "max_tokens":limit,
+        "messages":[{"role":"system","content":messages.system},{"role":"user","content":user_content}]
+    }))
+}
+
 fn client_builder(timeout: Duration) -> ClientBuilder {
     Client::builder()
         .connect_timeout(Duration::from_secs(8))
@@ -112,6 +134,20 @@ impl AiHttp {
                 .build()
                 .map_err(|_| AiHttpError::InvalidRequest)?,
         })
+    }
+
+    /// 视觉直传：图片走 image_url；失败原因原样返回，由上层决定是否降级。
+    pub fn complete_vision(
+        &self,
+        provider: &str,
+        key: &str,
+        messages: &PromptMessages,
+        images: &[String],
+    ) -> Result<String, AiHttpError> {
+        if images.is_empty() {
+            return Err(AiHttpError::InvalidRequest);
+        }
+        self.send(provider_endpoint(provider)?, key, &request_vision_body(provider, messages, images)?)
     }
 
     pub fn complete(
@@ -348,6 +384,30 @@ pub(crate) mod tests {
             provider_endpoint("unknown"),
             Err(AiHttpError::UnknownProvider)
         );
+    }
+
+    #[test]
+    fn vision_requests_use_visual_models_and_image_content() {
+        const IMG: &str = "dGVzdA==";
+        for (provider, model) in [
+            ("deepseek", "deepseek-v4-flash-vision-exp"),
+            ("qwen", "qwen-vl-max"),
+            ("glm", "glm-4.5v"),
+        ] {
+            let ctx = crate::ai_extract::ExtractionContext {
+                now: chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap(),
+                kind: crate::ai_extract::InputKind::Ocr,
+            };
+            let messages = crate::ai_extract::build_vision_messages("", &ctx).unwrap();
+            let body = request_vision_body(provider, &messages, &[IMG.to_string()]).unwrap();
+            assert_eq!(body["model"], model, "{provider} visual model");
+            assert!(body.get("response_format").is_none(), "{provider} vision 不附加 JSON 模式");
+            assert!(body.get("thinking").is_none() && body.get("enable_thinking").is_none(), "{provider} vision 不附加思考开关");
+            let user = &body["messages"][1]["content"];
+            assert_eq!(user.as_array().unwrap().len(), 2);
+            assert_eq!(user[1]["type"], "image_url");
+            assert!(user[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        }
     }
 
     #[test]

@@ -30,7 +30,7 @@ import "./todo.css";
 import { attachmentFileToPng } from "./attachmentFiles";
 import { clipboardIntent } from "./smartArrange";
 import { statusBarHint } from "./statusHint";
-import type { SmartArrangeEntryTone } from "../official/smartArrangeEntry";
+import type { SmartArrangeEntryTone } from "../../extensions/types";
 
 type HostedTodoPageProps = TodoPageProps & SystemStatusProps & { onOpenAttachment?: (path: string) => Promise<void>; onImportAttachment?: (png: string) => Promise<string>; pendingRequest?: number; smartArrangeAvailable?: boolean; smartArrangeLabel?: string; smartArrangeTone?: SmartArrangeEntryTone; onEnableSmartArrange?: () => void; loginPanel?: ReactNode; onEditorOpenChange?: (open: boolean) => void; onBusyChange?: (busy: boolean) => void; customerLabel?: string };
 export type TodoPageComponent = (props: HostedTodoPageProps) => ReactElement;

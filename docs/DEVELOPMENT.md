@@ -1,24 +1,20 @@
 # 开发指南
 
-本仓库是 React + TypeScript + Tauri 2 的 Windows 客户端，使用 SQLite 保存数据。无需其他产品源码即可构建；源码版本与安装包对应情况见[项目状态](STATUS.md)。
+本仓库是 React + TypeScript + Tauri 2 的 Windows 客户端，使用 SQLite 保存数据。默认构建只使用自带 API Key，不含官方账户实现。
 
 ## 开发环境
 
-- Windows x64；当前面向 Windows 10 / 11。
+- Windows 10 / 11 x64。
 - Node.js 22、pnpm 11、Rust stable。
-- Visual Studio C++ Build Tools 与 Windows SDK，安装要求见 [Tauri Windows 环境说明](https://v2.tauri.app/start/prerequisites/#windows)。
-- WebView2；本地截图 OCR 还需要相应 Windows 语言组件。
-
-在项目根目录安装依赖并启动：
+- Visual Studio C++ Build Tools 与 Windows SDK，要求见 [Tauri Windows 环境说明](https://v2.tauri.app/start/prerequisites/#windows)。
+- WebView2；截图识别的文字回退路径还需要相应 Windows OCR 语言组件。
 
 ```powershell
 corepack pnpm install --frozen-lockfile
 corepack pnpm tauri dev
 ```
 
-首次安装或编译需要下载依赖。Rust 的 `--offline` 仅适用于本机已有完整缓存的情况。
-
-调试版使用独立的 `development` 数据目录。开发验证请使用虚构待办与截图，不要复制正式数据或凭据。
+首次安装或编译需要下载依赖；Rust 的 `--offline` 仅适用于已有完整缓存的情况。调试版使用独立的 `development` 数据目录，验证时请使用虚构资料。
 
 ## 从哪里修改
 
@@ -26,23 +22,18 @@ corepack pnpm tauri dev
 | --- | --- |
 | 待办列表、表单、日历与交互 | `src/features/todo/` |
 | 工作／生活／学习的显示文字 | `src/features/todo/wordPacks.ts` |
-| 设置页面 | `src/features/settings/` |
+| 设置页面与 Key | `src/features/settings/` |
 | 主窗口、浮球、主题 | `src/app/` |
 | 存储、附件与备份恢复 | `crates/todo-core/` |
-| Windows 窗口、OCR、提醒与更新 | `src-tauri/src/` |
+| Windows 窗口、OCR、AI 请求、提醒与更新 | `src-tauri/src/` |
 | 界面与原生能力的数据接口 | `src/contracts/`、`src/native/` |
-| 官方服务的客户端登录、次数与购买界面 | `src/features/official/` |
-| 官方服务的客户端请求与会话保存 | `src-tauri/src/official.rs` |
+| 服务扩展接口与默认实现 | `src/extensions/`、`src-tauri/src/service_extension.rs` |
 
-最后两项是客户端代码，不含账号数据库、网关后台或服务密钥。它们与设置和智能整理流程相连，直接删除目录会破坏现有引用。
-
-本地待办与自带 API Key 不依赖官方登录。自带 Key 支持 DeepSeek、千问和智谱，客户端直连所选服务商，费用由自己的服务商账户承担。
-
-官方服务地址由 `POMETODO_API_BASE_URL` 环境变量或编译时配置读取。未配置时，本地和自带 Key 功能仍可使用，官方登录、次数及购买功能不可用。这个变量是服务地址，不是访问权限或模型密钥。
+公开构建不需要官方账户源码、服务器或作者密钥。维护者的官网构建通过扩展接口接入单独保存的账户模块；公开目录中没有这部分实现，不要开启需要该私有模块的 `official-services` 功能。
 
 ## 检查与构建
 
-按修改涉及的范围执行：
+按改动范围运行：
 
 ```powershell
 corepack pnpm test
@@ -52,28 +43,29 @@ cargo test --workspace --locked
 cargo test --manifest-path src-tauri/Cargo.toml --lib --tests --locked
 ```
 
-常规测试使用虚构数据、临时目录及本机模拟服务，不应调用付费模型。标为 ignored 的系统 OCR 测试不在默认测试中；自动测试不代表所有 Windows 配置都已验收。
+常规测试使用虚构数据、临时目录及本机模拟服务，不调用付费模型。标为 ignored 的系统 OCR 测试须显式运行；自动测试不代表所有 Windows 配置都已验收。
 
-生成原生开发候选：
+生成自己的 Windows 安装包：
 
 ```powershell
-corepack pnpm tauri build --debug --no-bundle
+corepack pnpm run build:installer
 ```
 
-结果位于 `src-tauri/target/debug/pometodo-desktop.exe`。它是开发候选，尚未经过官方安装升级验收。不要用自行编译的 release 程序直接覆盖正在使用的正式安装版；发布自己的版本前检查应用标识、数据目录和更新地址，避免与官方版本相互覆盖。
+构建脚本检查版本并生成安装包与校验记录，默认保存到 `artifacts/byok/`，编译缓存使用独立目录。脚本从本机缓存及 `docs/licenses/` 汇集原始版权许可，并把 MPL 组件源码归档随安装包提供；需要当前 Rust 工具链的 `rust-docs` 组件。本机依赖齐全后可加 `--offline`。构建不会发布或部署。
 
-`scripts/ui-preview.html` 与 `scripts/official-ui-preview.html` 使用虚构服务预览真实前端组件。OCR 测试图片由 `scripts/create-ocr-fixture.ps1` 和 `scripts/create-chat-ocr-fixture.ps1` 生成。保留这些脚本与测试，可帮助验证自己的改动。
+**安装包沿用 PomeTodo 的应用标识，会替换现有安装。** 请先导出备份，不要在正在使用的正式数据上测试。两种官方分发的安装包保留相同的数据位置，但更新渠道不同：GitHub 安装包不会自动更新成带账户的官网安装包。自行分发改版前，请修改应用标识和更新地址，清楚标明发布者。
+
+OCR 夹具由 `scripts/create-ocr-fixture.ps1` 与 `scripts/create-chat-ocr-fixture.ps1` 使用虚构文字生成。
 
 ## 数据与网络
 
-- 任务及附件保存在本机，支持备份导出和恢复；目前没有跨设备同步，也没有旧 WPF 数据成功转换入口。
-- 未启用智能整理时，粘贴保留普通文字及截图附件，不自动理解内容或填写字段。
-- 官方 AI 整理截图时，将处理后的截图和相关文字发送到官方服务，再由服务器调用模型。
-- 自带 Key 整理截图时，先用 Windows 本地 OCR，再发送提取的文字给所选服务商。文字整理同样会发送待整理文字。
-- API Key 和官方会话使用 Windows 用户级加密保存，常规任务 ZIP 备份不包含这些凭据。
-- AI 结果写入草稿，由用户核对后保存；失败时应保留已有输入。
-- 客户端启动时检查官网更新清单。本地待办不依赖 GitHub，但软件并非完全没有网络请求。
+- 任务、附件与备份保存在本机；目前没有跨设备同步，也没有旧 WPF 数据成功转换入口。
+- 未启用智能整理时，粘贴保留普通文字及截图附件，不自动填写字段。
+- 启用 AI 后，文字发送给所选服务商；截图先尝试发送处理后的图片，失败时用 Windows OCR 提取文字再请求。回退可能产生额外请求，按服务商规则计费。
+- API Key 使用 Windows 用户级加密保存，任务 ZIP 备份不包含 Key。
+- AI 结果先写入草稿，由用户核对后保存；失败应保留已有输入。
+- 启动时检查 ShiliuX 的本渠道更新清单；更新下载校验渠道、网址、大小与 SHA256。本地待办不依赖 GitHub 连通。
 
 ## 提交改进
 
-自己电脑上的修改不必提交给官方。希望合入官方版本时，请阅读[参与指南](../.github/CONTRIBUTING.md)，说明改动与验证结果。
+自己电脑上的修改不必提交。希望合入维护版本时，请阅读[参与指南](../.github/CONTRIBUTING.md)，说明改动与验证结果，并确认贡献许可。

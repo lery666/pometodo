@@ -3,8 +3,8 @@ use super::*;
 fn valid_manifest() -> serde_json::Value {
     serde_json::json!({
         "ok":true,"product":"pometodo","platform":"windows-x86_64",
-        "channel":"standalone","installerType":"nsis","version":"0.1.1",
-        "downloadUrl":"https://www.shiliux.com/downloads/pometodo/releases/0.1.1/PomeTodo-setup.exe",
+        "channel":crate::distribution::UPDATE_CHANNEL,"installerType":"nsis","version":"0.1.1",
+        "downloadUrl":format!("https://www.shiliux.com{}0.1.1/PomeTodo-setup.exe", crate::distribution::DOWNLOAD_PATH),
         "sha256":"a".repeat(64),"byteLength":1024,"releaseNotes":"修复与改进",
         "publishedAt":"2026-09-06T08:00:00Z"
     })
@@ -15,6 +15,22 @@ fn accepts_own_valid_installer_manifest_and_windows_bom() {
     let text = valid_manifest().to_string();
     assert_eq!(parse_manifest(&text).unwrap().version, "0.1.1");
     assert!(parse_manifest(&format!("\u{feff}{text}")).is_ok());
+}
+
+#[test]
+fn rejects_installer_from_the_other_distribution_even_with_valid_integrity() {
+    let (other_channel, other_path) = if crate::distribution::OFFICIAL_SERVICES {
+        ("byok", "/downloads/pometodo/byok/releases/")
+    } else {
+        ("standalone", "/downloads/pometodo/releases/")
+    };
+    let mut doc = valid_manifest();
+    doc["channel"] = other_channel.into();
+    assert!(parse_manifest(&doc.to_string()).is_err());
+    doc = valid_manifest();
+    doc["downloadUrl"] =
+        format!("https://www.shiliux.com{other_path}0.1.1/PomeTodo-setup.exe").into();
+    assert!(parse_manifest(&doc.to_string()).is_err());
 }
 
 #[test]

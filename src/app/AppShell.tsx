@@ -11,22 +11,18 @@ import "./shell.css";
 import logoUrl from "../assets/pometodo-logo.png";
 import type { StatusMessage } from "../components/StatusBar";
 import type { SmartArrangePreferences, SmartArrangeSnapshot } from "../contracts/smartArrange";
-import { createOfficialServices, type Entitlement, type OfficialAccount, type OfficialOffers } from "../contracts/official";
-import AccountCard from "../features/official/AccountCard";
-import OfficialLoginCard from "../features/official/OfficialLoginCard";
-import { smartArrangeEntry } from "../features/official/smartArrangeEntry";
+import { useServiceExtension } from "@pometodo/service-extension";
 import { createUpdateController } from "./updateController";
 import { updateServices } from "../native/updateServices";
 import UpdatePanel from "./UpdatePanel";
 
 interface AppInfo {
-  dataDirectory: string; theme: SettingsTheme; version: string;
+  dataDirectory: string; theme: SettingsTheme; version: string; serviceMode: "byok" | "official";
   quickDueOptions: QuickDueSetting[]; customers: CustomerSetting[]; closeAction: "tray" | "exit"; floatingBallEnabled: boolean; customerLabel: string;
 }
 interface OpenRequest { taskId?: string; settings: boolean; pending?: boolean; requestId: number }
 const todoServices = createTodoServices(invoke);
 const settingsServices = createSettingsServices(invoke);
-const officialServices = createOfficialServices(invoke);
 async function openAttachment(path: string) {
   try { await invoke("pometodo_open_attachment", { path }); }
   catch (error) { throw nativeError(error); }
@@ -57,8 +53,7 @@ interface LeaveSettingsOptions {
 }
 
 /**
- * 返回设置页一律放行：扫码绑定中离开只是取消当前二维码（不影响已登录设备），
- * 付款由服务端轮询与后台补偿兜底；页面上的保存均为自动保存，离开不中断。
+ * 页面设置自动保存，返回时不锁住导航；各扩展自行处理离开时的清理。
  */
 export function leaveSettings({ closeSettings }: LeaveSettingsOptions) {
   closeSettings();
@@ -125,40 +120,8 @@ export function AppShell() {
   const focusSeqRef = useRef(0);
   const [todoBusy, setTodoBusy] = useState(false);
   const [todoEditorOpen, setTodoEditorOpen] = useState(false);
-  const [loginPanelOpen, setLoginPanelOpen] = useState(false);
-  const [purchaseActive, setPurchaseActive] = useState(false);
-  const purchaseActiveRef = useRef(false);
-  const reportPurchaseActive = useCallback((active: boolean) => { purchaseActiveRef.current = active; setPurchaseActive(active); }, []);
-  const [accountBusy, setAccountBusy] = useState(false);
-  const accountBusyRef = useRef(false);
-  const reportAccountBusy = useCallback((busy: boolean) => {
-    accountBusyRef.current = busy;
-    setAccountBusy(busy);
-  }, []);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const guardedSettingsServices = useMemo(() => trackSettingsActivity(settingsServices, setSettingsBusy), []);
-  const [officialAccount, setOfficialAccount] = useState<OfficialAccount | null>(null);
-  const [officialOffers, setOfficialOffers] = useState<OfficialOffers | null>(null);
-  const accountSequence = useRef(0);
-  const refreshOfficialAccount = useCallback(async () => {
-    const sequence = ++accountSequence.current;
-    try {
-      const account = await officialServices.account();
-      if (sequence !== accountSequence.current) return;
-      setOfficialAccount(account);
-      // 商品目录只在登录后读取；入口文案只区分"可购买/暂不可用"，失败时静默当作暂不可用。
-      if (!account.loggedIn) { setOfficialOffers(null); return; }
-      try {
-        const offers = await officialServices.offers();
-        if (sequence === accountSequence.current) setOfficialOffers(offers);
-      } catch {
-        if (sequence === accountSequence.current) setOfficialOffers(null);
-      }
-    } catch {
-      if (sequence === accountSequence.current) { setOfficialAccount(null); setOfficialOffers(null); }
-    }
-  }, []);
-  useEffect(() => { void refreshOfficialAccount(); return () => { accountSequence.current++; }; }, [refreshOfficialAccount]);
   const [smartArrange, setSmartArrange] = useState<SmartArrangeSnapshot | null>(null);
   const [smartArrangeBusy, setSmartArrangeBusy] = useState(false);
   const smartArrangeSequence = useRef(0);
@@ -183,44 +146,17 @@ export function AppShell() {
     } catch (error) { setActionMessage({ tone: "warn", text: nativeError(error).message }); }
     finally { setSmartArrangeBusy(false); }
   }
-  function officialChanged() {
-    void refreshOfficialAccount();
-    void refreshSmartArrange();
-  }
-  async function activateOfficial(entitlement: Entitlement) {
-    if (!entitlement.canExtract) throw new Error("官方权益暂不可用");
-    const snapshot = await invoke<SmartArrangeSnapshot>("pometodo_set_smart_arrange", { preferences: { enabled: true, source: "official" } });
-    smartArrangeSequence.current++;
-    setSmartArrange(snapshot);
-    if (!snapshot.available) throw new Error(snapshot.message);
-    setActionMessage({ tone: "info", text: "智能整理已开启" });
-  }
-  const smartArrangeEnabled = Boolean(smartArrange?.preferences.enabled);
-  const byokActive = Boolean(smartArrangeEnabled && smartArrange?.preferences.source === "byok" && smartArrange.available);
-  const arrangeEntry = smartArrangeEntry(smartArrange, officialAccount, officialOffers);
-  /** 卡片上的智能整理入口：未登录→表单内原位扫码；可直接启用→领取并开启；其余去设置页。 */
-  function openArrangeEntry() {
-    if (arrangeEntry.autoLogin) { setLoginPanelOpen(true); return; }
-    if (arrangeEntry.action === "enable") { void enableOfficialSmartArrange(); return; }
-    if (arrangeEntry.action === "settings") {
-      focusSeqRef.current += 1;
-      setSettingsFocusRequest({ seq: focusSeqRef.current, target: "smartArrange" });
-    }
-    setSettingsOpen(true);
-  }
-  // 表单上的"启用智能整理"：登录状态下领取（如需）并直接开启官方来源，成功后入口即变"粘贴并整理"。
-  async function enableOfficialSmartArrange() {
-    if (smartArrangeBusy || accountBusyRef.current) return;
-    setSmartArrangeBusy(true);
-    try {
-      const account = await officialServices.account();
-      if (!account?.loggedIn) throw new Error("请先登录微信账号");
-      const entitlement = account.entitlement?.trial.claimed ? account.entitlement : await officialServices.trial();
-      await activateOfficial(entitlement);
-    } catch (error) {
-      setActionMessage({ tone: "warn", text: nativeError(error).message });
-    } finally { setSmartArrangeBusy(false); }
-  }
+  const service = useServiceExtension({
+    snapshot: smartArrange, busy: smartArrangeBusy, editorOpen: todoEditorOpen, settingsOpen,
+    onSnapshot(snapshot) { smartArrangeSequence.current++; setSmartArrange(snapshot); },
+    refresh: () => { void refreshSmartArrange(); },
+    onMessage: setActionMessage,
+    openSettings(target) {
+      if (target) { focusSeqRef.current++; setSettingsFocusRequest({ seq: focusSeqRef.current, target }); }
+      else setSettingsFocusRequest(null);
+      setSettingsOpen(true);
+    },
+  });
   // 更新：启动安静检查一次，窗口恢复焦点时检查但至少间隔 6 小时。
   const updateController = useMemo(() => createUpdateController(updateServices), []);
   const updateState = useSyncExternalStore(updateController.subscribe, updateController.getSnapshot, updateController.getSnapshot);
@@ -240,8 +176,6 @@ export function AppShell() {
       else setActionMessage({ tone: "info", text: "已是最新版本" });
     });
   }, [updateController]);
-  // 表单关闭后不再保留其中的登录请求；安装前须无草稿、保存、登录或付款。
-  useEffect(() => { if (!todoEditorOpen) setLoginPanelOpen(false); }, [todoEditorOpen]);
   const [refreshRequest, setRefreshRequest] = useState(0);
   const [focusTaskRequest, setFocusTaskRequest] = useState<{ taskId: string; requestId: number }>();
   const [pendingRequest, setPendingRequest] = useState(0);
@@ -249,7 +183,7 @@ export function AppShell() {
   const [pinned, setPinned] = useState(false);
   const [savingPin, setSavingPin] = useState(false);
   const canInstall = canInstallUpdate({
-    todoBusy, todoEditorOpen, todoLoginOpen: loginPanelOpen, accountBusy, settingsBusy,
+    todoBusy, todoEditorOpen, todoLoginOpen: service.editorBusy, accountBusy: service.busy, settingsBusy,
     smartArrangeBusy, themeSaving: savingTheme, pinSaving: savingPin, installing: updateState.installing,
   });
   const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -302,9 +236,9 @@ export function AppShell() {
 
   const onSettingsChanged = useCallback((snapshot: SettingsSnapshot) => {
     void refreshSmartArrange();
-    setInfo({ dataDirectory: snapshot.dataDirectory, theme: snapshot.settings.theme, version: snapshot.version,
+    setInfo(current => ({ serviceMode: current?.serviceMode ?? "byok", dataDirectory: snapshot.dataDirectory, theme: snapshot.settings.theme, version: snapshot.version,
       customers: snapshot.customers, quickDueOptions: snapshot.settings.quickDueOptions, closeAction: snapshot.settings.closeAction,
-      floatingBallEnabled: snapshot.settings.floatingBallEnabled, customerLabel: snapshot.settings.customerLabel });
+      floatingBallEnabled: snapshot.settings.floatingBallEnabled, customerLabel: snapshot.settings.customerLabel }));
     setRefreshRequest((value) => value + 1);
   }, [refreshSmartArrange]);
 
@@ -345,7 +279,7 @@ export function AppShell() {
         {updateAvailable && <button className="pome-icon-button" aria-label="发现新版本" title="发现新版本" aria-pressed={updateOpen} onClick={() => setUpdateOpen(value => !value)}><Icon kind="update" /></button>}
         <button className="pome-icon-button" aria-label={pinned ? "取消置顶" : "置顶窗口"} title={pinned ? "取消置顶" : "置顶窗口"} aria-pressed={pinned} disabled={savingPin} onClick={() => void togglePin()}><Icon kind="pin" /></button>
         <button className="pome-icon-button" aria-label="切换明暗主题" title="切换明暗主题" disabled={!info || savingTheme || updateOpen} onClick={() => void setTheme(theme === "dark" ? "light" : "dark")}><Icon kind="theme" /></button>
-        <button ref={settingsButton} className="pome-icon-button" aria-label="设置" title="设置" disabled={!info || settingsOpen || todoBusy} onClick={() => { setSettingsFocusRequest(null); setLoginPanelOpen(false); setSettingsOpen(true); }}><Icon kind="settings" /></button>
+        <button ref={settingsButton} className="pome-icon-button" aria-label="设置" title="设置" disabled={!info || settingsOpen || todoBusy} onClick={() => { setSettingsFocusRequest(null); setSettingsOpen(true); }}><Icon kind="settings" /></button>
         <span className="pome-title-divider" />
         <button className="pome-icon-button" aria-label="最小化" title="最小化" onClick={() => void windowAction("minimize")}><Icon kind="minimize" /></button>
         <button className="pome-icon-button pome-close-button" aria-label={closeLabel} title={closeLabel} onClick={() => void windowAction("close")}><Icon kind="close" /></button>
@@ -353,14 +287,15 @@ export function AppShell() {
     </header>
     <main className="pome-content">
       {startupError ? <section className="pome-startup-state" role="alert"><h1>未能打开本地数据</h1><p>{startupError}</p><p>请检查后重新启动 PomeTodo，原数据文件会保留。</p></section>
+        : info && info.serviceMode !== service.mode ? <section className="pome-startup-state" role="alert"><h1>程序组件不一致</h1><p>请重新安装完整版本，原数据文件会保留。</p></section>
         : info ? <>
           <div className="pome-page" hidden={settingsOpen || updateOpen} inert={settingsOpen || updateOpen || undefined}>
-            <TodoPage services={todoServices} smartArrangeAvailable={smartArrange?.available ?? false} smartArrangeLabel={arrangeEntry.label} smartArrangeTone={arrangeEntry.tone} onEnableSmartArrange={openArrangeEntry} onBusyChange={setTodoBusy} onEditorOpenChange={setTodoEditorOpen}
-              loginPanel={loginPanelOpen && !settingsOpen ? <OfficialLoginCard services={officialServices} autoLogin onActivated={activateOfficial} onChanged={officialChanged} onSignedIn={() => { setLoginPanelOpen(false); }} onCancel={() => setLoginPanelOpen(false)} onMessage={setActionMessage} /> : undefined}
+            <TodoPage services={todoServices} smartArrangeAvailable={smartArrange?.available ?? false} smartArrangeLabel={service.entry.label} smartArrangeTone={service.entry.tone} onEnableSmartArrange={service.openEntry} onBusyChange={setTodoBusy} onEditorOpenChange={setTodoEditorOpen}
+              loginPanel={service.editorContent}
               systemMessage={actionError} onDismissSystemMessage={() => setActionError(null)} onOpenAttachment={openAttachment} onImportAttachment={importAttachment} pendingRequest={pendingRequest} active={!settingsOpen && !updateOpen} refreshRequest={refreshRequest} quickDueOptions={JSON.stringify(info.quickDueOptions)} customerSuggestions={info.customers.map((customer) => customer.displayName)} customerLabel={info.customerLabel} focusTaskRequest={focusTaskRequest} />
           </div>
           {settingsOpen && <div className="pome-page" hidden={updateOpen} inert={updateOpen || undefined}>
-            <SettingsPage active={!updateOpen} services={guardedSettingsServices} accountCard={<AccountCard services={officialServices} byokActive={byokActive} smartArrangeEnabled={smartArrangeEnabled} onActivated={activateOfficial} onChanged={officialChanged} onMessage={setActionMessage} onPurchaseActive={reportPurchaseActive} onBusyChange={reportAccountBusy} />} hint={purchaseActive ? "一次支付自动到账，不自动续费" : undefined} onCheckUpdate={handleCheckUpdate} updateChecking={updateState.checking} activeTheme={info.theme} smartArrange={{ snapshot: smartArrange, busy: smartArrangeBusy, onChange: preferences => void updateSmartArrange(preferences) }} systemMessage={actionError} onDismissSystemMessage={() => setActionError(null)} floatingBallEnabled={info.floatingBallEnabled} onChanged={onSettingsChanged} onBack={() => void leaveSettingsPage()} settingsFocusRequest={settingsFocusRequest} />
+            <SettingsPage active={!updateOpen} services={guardedSettingsServices} accountCard={service.settingsContent} hint={service.settingsHint} onCheckUpdate={handleCheckUpdate} updateChecking={updateState.checking} activeTheme={info.theme} smartArrange={{ officialServicesEnabled: service.mode === "official", snapshot: smartArrange, busy: smartArrangeBusy || service.arrangeBusy, onChange: preferences => void updateSmartArrange(preferences) }} systemMessage={actionError} onDismissSystemMessage={() => setActionError(null)} floatingBallEnabled={info.floatingBallEnabled} onChanged={onSettingsChanged} onBack={() => void leaveSettingsPage()} settingsFocusRequest={settingsFocusRequest} />
           </div>}
           {updateOpen && <UpdatePanel controller={updateController} canInstall={canInstall} onBack={() => setUpdateOpen(false)} />}
         </> : <div className="pome-startup-state" role="status">正在打开待办…</div>}

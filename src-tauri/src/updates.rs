@@ -13,7 +13,7 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 
-const MANIFEST_URL: &str = "https://www.shiliux.com/downloads/pometodo/latest/release.json";
+use crate::distribution::{DOWNLOAD_PATH, MANIFEST_URL, UPDATE_CHANNEL};
 const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const PROGRESS_EVENT: &str = "pometodo-update-progress";
@@ -99,7 +99,7 @@ fn allowed_download_url(value: &str) -> bool {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
-        && url.path().starts_with("/downloads/pometodo/releases/")
+        && url.path().starts_with(DOWNLOAD_PATH)
         && url.path().ends_with(".exe")
         && url
             .path()
@@ -116,7 +116,7 @@ fn parse_manifest(body: &str) -> Result<Manifest, String> {
     if !manifest.ok
         || manifest.product != "pometodo"
         || manifest.platform != "windows-x86_64"
-        || manifest.channel != "standalone"
+        || manifest.channel != UPDATE_CHANNEL
         || manifest.installer_type != "nsis"
         || !allowed_download_url(&manifest.download_url)
         || manifest.sha256.len() != 64
@@ -256,7 +256,7 @@ pub async fn pometodo_check_update(state: State<'_, UpdateState>) -> Result<Upda
     *state.manifest.lock().map_err(|_| "无法记录更新状态")? = available.then_some(manifest);
     Ok(UpdateCheck {
         current_version: current,
-        channel: "standalone",
+        channel: UPDATE_CHANNEL,
         available,
         release,
     })

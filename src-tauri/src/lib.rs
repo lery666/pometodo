@@ -3,13 +3,16 @@ mod ai_http;
 mod clipboard;
 mod commands;
 mod context_menu;
+mod distribution;
 mod file_commands;
 mod floating;
 mod local_extract;
 mod ocr;
+#[cfg(feature = "official-services")]
 mod official;
 mod reminders;
 mod secrets;
+mod service_extension;
 mod settings_commands;
 mod smart_arrange;
 mod updates;
@@ -179,57 +182,55 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            updates::pometodo_check_update,
-            updates::pometodo_download_update,
-            updates::pometodo_install_update,
-            commands::pometodo_app_info,
-            settings_commands::pometodo_settings_load,
-            settings_commands::pometodo_settings_update,
-            settings_commands::pometodo_customer_rename,
-            settings_commands::pometodo_customer_hide,
-            settings_commands::pometodo_key_save,
-            settings_commands::pometodo_key_clear,
-            file_commands::pometodo_choose_directory,
-            file_commands::pometodo_apply_directory,
-            file_commands::pometodo_export_backup,
-            file_commands::pometodo_choose_backup_import,
-            file_commands::pometodo_import_backup,
-            floating::pometodo_float_expand,
-            floating::pometodo_float_present,
-            floating::pometodo_float_preview_state,
-            floating::pometodo_float_menu,
-            floating::pometodo_open_main,
-            context_menu::pometodo_menu_snapshot,
-            context_menu::pometodo_menu_present,
-            context_menu::pometodo_menu_action,
-            commands::pometodo_set_theme,
-            commands::pometodo_list_tasks,
-            commands::pometodo_create_task,
-            commands::pometodo_update_task,
-            commands::pometodo_set_status,
-            commands::pometodo_set_urgent,
-            commands::pometodo_delete_task,
-            commands::pometodo_attachment_data_url,
-            commands::pometodo_open_attachment,
-            clipboard::pometodo_recognize_clipboard,
-            clipboard::pometodo_recognize_attachment,
-            smart_arrange::pometodo_smart_arrange_state,
-            smart_arrange::pometodo_set_smart_arrange,
-            official::pometodo_official_account,
-            official::pometodo_official_begin,
-            official::pometodo_official_poll,
-            official::pometodo_official_cancel,
-            official::pometodo_official_trial,
-            official::pometodo_official_logout,
-            official::pometodo_official_offers,
-            official::pometodo_official_order,
-            official::pometodo_official_pending_order,
-            official::pometodo_official_cancel_order,
-            official::pometodo_official_order_status,
-            clipboard::pometodo_save_clipboard_attachment,
-            clipboard::pometodo_import_attachment,
-        ])
+        .invoke_handler({
+            let shared: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                updates::pometodo_check_update,
+                updates::pometodo_download_update,
+                updates::pometodo_install_update,
+                commands::pometodo_app_info,
+                settings_commands::pometodo_settings_load,
+                settings_commands::pometodo_settings_update,
+                settings_commands::pometodo_customer_rename,
+                settings_commands::pometodo_customer_hide,
+                settings_commands::pometodo_key_save,
+                settings_commands::pometodo_key_clear,
+                file_commands::pometodo_choose_directory,
+                file_commands::pometodo_apply_directory,
+                file_commands::pometodo_export_backup,
+                file_commands::pometodo_choose_backup_import,
+                file_commands::pometodo_import_backup,
+                floating::pometodo_float_expand,
+                floating::pometodo_float_present,
+                floating::pometodo_float_preview_state,
+                floating::pometodo_float_menu,
+                floating::pometodo_open_main,
+                context_menu::pometodo_menu_snapshot,
+                context_menu::pometodo_menu_present,
+                context_menu::pometodo_menu_action,
+                commands::pometodo_set_theme,
+                commands::pometodo_list_tasks,
+                commands::pometodo_create_task,
+                commands::pometodo_update_task,
+                commands::pometodo_set_status,
+                commands::pometodo_set_urgent,
+                commands::pometodo_delete_task,
+                commands::pometodo_attachment_data_url,
+                commands::pometodo_open_attachment,
+                clipboard::pometodo_recognize_clipboard,
+                clipboard::pometodo_recognize_attachment,
+                smart_arrange::pometodo_smart_arrange_state,
+                smart_arrange::pometodo_set_smart_arrange,
+                clipboard::pometodo_save_clipboard_attachment,
+                clipboard::pometodo_import_attachment,
+            ];
+            move |request: tauri::ipc::Invoke<tauri::Wry>| {
+                #[cfg(feature = "official-services")]
+                if request.message.command().starts_with("pometodo_official_") {
+                    return official::handle(request);
+                }
+                shared(request)
+            }
+        })
         .run(tauri::generate_context!())
         .expect("PomeTodo 无法启动");
 }

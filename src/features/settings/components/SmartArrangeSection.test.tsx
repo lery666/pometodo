@@ -12,6 +12,18 @@ function renderSection(snapshot: SmartArrangeSnapshot) {
 }
 
 describe("SmartArrangeSection 渐进展示", () => {
+  it("不提供官方服务时，直接显示 Key 设置而不显示服务来源", () => {
+    const html = renderToStaticMarkup(<SmartArrangeSection
+      officialServicesEnabled={false}
+      snapshot={{ preferences: { enabled: false, source: "byok" }, available: false, message: "智能整理已关闭" }}
+      busy={false} onChange={() => undefined}>
+      <div>自带 Key 配置表单</div>
+    </SmartArrangeSection>);
+    expect(html).toContain("自带 Key 配置表单");
+    expect(html).not.toContain("服务来源");
+    expect(html).not.toContain("官方服务");
+  });
+
   it("关闭时只显示启用开关和简短说明", () => {
     const html = renderSection({
       preferences: { enabled: false, source: "official" },

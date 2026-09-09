@@ -21,7 +21,8 @@ pub fn require_enabled(preferences: &SmartArrangePreferences) -> Result<(), Stri
 }
 
 pub fn selected_user_key(storage: &LocalStorage) -> Result<(String, String), String> {
-    let preferences = storage.repo.smart_arrange_preferences()?;
+    let preferences =
+        crate::distribution::effective_preferences(storage.repo.smart_arrange_preferences()?);
     require_enabled(&preferences)?;
     if preferences.source != SmartArrangeSource::Byok {
         return Err("请先登录并开通官方智能整理".into());
@@ -34,7 +35,8 @@ pub fn selected_user_key(storage: &LocalStorage) -> Result<(String, String), Str
 }
 
 fn snapshot(storage: &LocalStorage) -> Result<SmartArrangeSnapshot, String> {
-    let preferences = storage.repo.smart_arrange_preferences()?;
+    let preferences =
+        crate::distribution::effective_preferences(storage.repo.smart_arrange_preferences()?);
     let (available, message) = if !preferences.enabled {
         (false, "智能整理已关闭".into())
     } else {
@@ -59,14 +61,15 @@ pub async fn pometodo_smart_arrange_state(
     })
     .await?;
     if value.preferences.enabled && value.preferences.source == SmartArrangeSource::Official {
-        let result =
-            tauri::async_runtime::spawn_blocking(move || crate::official::available(&root))
-                .await
-                .map_err(|_| "读取官方服务状态未完成")?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            crate::service_extension::available(&root)
+        })
+        .await
+        .map_err(|_| "读取官方服务状态未完成")?;
         match result {
-            Ok(status) => {
-                value.available = status.available;
-                value.message = status.message;
+            Ok((available, message)) => {
+                value.available = available;
+                value.message = message;
             }
             Err(message) => {
                 value.available = false;
@@ -82,6 +85,7 @@ pub async fn pometodo_set_smart_arrange(
     app: tauri::AppHandle,
     preferences: SmartArrangePreferences,
 ) -> Result<SmartArrangeSnapshot, String> {
+    crate::distribution::validate_preferences(&preferences)?;
     with_storage(app.clone(), move |storage| {
         storage.repo.set_smart_arrange_preferences(preferences)?;
         Ok(())
@@ -93,6 +97,33 @@ pub async fn pometodo_set_smart_arrange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(feature = "official-services"))]
+    fn fresh_install_and_saved_official_selection_are_byok_without_auto_enable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = LocalStorage::open(dir.path()).unwrap();
+        let value = snapshot(&storage).unwrap();
+        assert_eq!(value.preferences.source, SmartArrangeSource::Byok);
+        assert!(!value.preferences.enabled);
+        let saved = SmartArrangePreferences {
+            enabled: true,
+            source: SmartArrangeSource::Official,
+        };
+        storage
+            .repo
+            .set_smart_arrange_preferences(saved.clone())
+            .unwrap();
+        let value = snapshot(&storage).unwrap();
+        assert_eq!(value.preferences.source, SmartArrangeSource::Byok);
+        assert!(!value.preferences.enabled);
+        assert!(!value.available);
+        assert_eq!(
+            storage.repo.smart_arrange_preferences().unwrap(),
+            saved,
+            "读取不能改写旧设置"
+        );
+    }
 
     #[test]
     fn disabled_and_official_cannot_read_a_byok_key() {
@@ -108,7 +139,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             selected_user_key(&storage).unwrap_err(),
-            "请先登录并开通官方智能整理"
+            if crate::distribution::OFFICIAL_SERVICES {
+                "请先登录并开通官方智能整理"
+            } else {
+                "智能整理尚未开启"
+            }
         );
         storage
             .repo
