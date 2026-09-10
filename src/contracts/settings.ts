@@ -1,6 +1,7 @@
 /** 设置页面与原生服务的数据接口；页面不直接调用系统或保存凭据。 */
 export type SettingsTheme = "system" | "light" | "dark";
-export type AiProvider = "deepseek" | "qwen" | "glm";
+/** custom 为“自定义”：由使用者填写接口地址与模型名，可接 Agnes 等任意 OpenAI 兼容服务。 */
+export type AiProvider = "deepseek" | "qwen" | "glm" | "custom";
 export type DirectoryKind = "data" | "screenshots";
 export interface QuickDueSetting { label: string; days: number }
 export interface CustomerSetting { originalName: string; displayName: string; activeCount: number }
@@ -15,6 +16,10 @@ export interface AppSettings {
   dailyReminderTime: string;
   quickDueOptions: QuickDueSetting[];
   aiProvider: AiProvider;
+  /** 自定义服务商的接口基地址；仅 aiProvider 为 custom 时参与请求。 */
+  aiBaseUrl: string;
+  /** 自定义服务商的模型名；仅 aiProvider 为 custom 时参与请求。 */
+  aiModel: string;
   /** “客户”字段的显示名（默认“客户”），仅影响界面文案。 */
   customerLabel: string;
 }

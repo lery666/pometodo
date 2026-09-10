@@ -3,7 +3,7 @@
  * 行为来源为旧 WPF 设置页；不照搬其"非法时间静默改成 09:00"的行为，
  * 非法输入一律保留并返回可读错误，由调用方决定是否提交服务。
  */
-import type { CustomerSetting, QuickDueSetting } from "../../contracts/settings";
+import type { AiProvider, CustomerSetting, QuickDueSetting } from "../../contracts/settings";
 
 export interface ParsedTimeInput {
   ok: true;
@@ -17,6 +17,62 @@ export interface InvalidTimeInput {
 export const QUICK_DUE_MAX_OPTIONS = 12;
 export const QUICK_DUE_MAX_LABEL_LENGTH = 12;
 export const CUSTOMER_MAX_DISPLAY_LENGTH = 100;
+export const AI_BASE_URL_MAX_LENGTH = 2048;
+export const AI_MODEL_MAX_LENGTH = 200;
+
+/**
+ * Agnes AI 预设：OpenAI 兼容协议，文本模型无限期免费。
+ * 只填基地址即可，请求层会自动补 /chat/completions。
+ */
+export const AGNES_PRESET = {
+  baseUrl: "https://apihub.agnes-ai.com/v1",
+  model: "agnes-2.0-flash",
+} as const;
+
+export type AiBaseUrlValidation =
+  | { ok: true; baseUrl: string }
+  | { ok: false; error: string };
+
+/**
+ * 自定义服务商接口地址的前端校验，规则与 Rust 侧一致：
+ * 允许留空（未填完不阻断保存），否则必须是带主机名的 http/https 地址。
+ */
+export function validateAiBaseUrl(value: string): AiBaseUrlValidation {
+  const baseUrl = value.trim();
+  if (!baseUrl) return { ok: true, baseUrl: "" };
+  if (baseUrl.length > AI_BASE_URL_MAX_LENGTH) {
+    return { ok: false, error: `接口地址不能超过 ${AI_BASE_URL_MAX_LENGTH} 个字符。` };
+  }
+  if (/\s/.test(baseUrl)) {
+    return { ok: false, error: "接口地址不能包含空格或换行。" };
+  }
+  const lower = baseUrl.toLowerCase();
+  let rest: string;
+  if (lower.startsWith("https://")) rest = baseUrl.slice(8);
+  else if (lower.startsWith("http://")) rest = baseUrl.slice(7);
+  else return { ok: false, error: "接口地址需以 http:// 或 https:// 开头。" };
+  const authority = rest.split(/[/?#]/)[0] ?? "";
+  const host = authority.split("@").pop() ?? "";
+  if (!(host.split(":")[0] ?? "")) {
+    return { ok: false, error: "接口地址缺少主机名。" };
+  }
+  return { ok: true, baseUrl };
+}
+
+export type AiModelValidation = { ok: true; model: string } | { ok: false; error: string };
+
+/** 模型名允许留空；只挡住会破坏请求体的内容。 */
+export function validateAiModel(value: string): AiModelValidation {
+  const model = value.trim();
+  if (model.length > AI_MODEL_MAX_LENGTH) {
+    return { ok: false, error: `模型名不能超过 ${AI_MODEL_MAX_LENGTH} 个字。` };
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(model)) {
+    return { ok: false, error: "模型名不能包含换行或控制字符。" };
+  }
+  return { ok: true, model };
+}
 
 /** 校验 HH:mm 提醒时间；"9:5" 这类合法短格式规范化为 "09:05"。 */
 export function parseReminderTimeInput(value: string): ParsedTimeInput | InvalidTimeInput {
@@ -189,6 +245,13 @@ export interface UnsavedInputProbe {
   dailyReminderEnabled: boolean;
   /** 尚未保存的 API Key 输入。 */
   apiKeyDraft: string;
+  /** 当前服务商；仅自定义服务商需要比对地址与模型名。 */
+  aiProvider: AiProvider;
+  savedAiBaseUrl: string;
+  savedAiModel: string;
+  /** 尚未保存的自定义接口地址与模型名输入。 */
+  aiBaseUrlDraft: string;
+  aiModelDraft: string;
   /** 交付日期标签编辑表单是否打开。 */
   quickDueEditorOpen: boolean;
   /** 客户改名行内编辑是否进行中。 */
@@ -199,6 +262,11 @@ export interface UnsavedInputProbe {
 export function hasUnsavedSettingsInput(probe: UnsavedInputProbe): boolean {
   if (probe.customerRenaming || probe.quickDueEditorOpen) return true;
   if (probe.apiKeyDraft.trim()) return true;
+  // 自定义接口地址与模型名自动保存，失焦前仍算未提交。
+  if (probe.aiProvider === "custom") {
+    if (probe.aiBaseUrlDraft.trim() !== probe.savedAiBaseUrl.trim()) return true;
+    if (probe.aiModelDraft.trim() !== probe.savedAiModel.trim()) return true;
+  }
   if (probe.reminderTimeError) return true;
   if (!probe.dailyReminderEnabled) return false;
   const parsed = parseReminderTimeInput(probe.reminderTimeInput);

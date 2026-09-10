@@ -20,10 +20,13 @@ import SettingsRow from "./components/SettingsRow";
 import ToggleSwitch from "./components/ToggleSwitch";
 import StatusBar, { type SystemStatusProps } from "../../components/StatusBar";
 import {
+  AGNES_PRESET,
   canRemoveQuickDueOption,
   hasUnsavedSettingsInput,
   parseReminderTimeInput,
   planQuickDueCommit,
+  validateAiBaseUrl,
+  validateAiModel,
   validateCustomerDisplayName,
   type QuickDueEditorTarget,
 } from "./settingsModel";
@@ -233,6 +236,10 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
   }, [settingsFocusRequest, state.phase]);
   useEffect(() => () => { if (glowTimerRef.current) window.clearTimeout(glowTimerRef.current); }, []);
   const [keyDraft, setKeyDraft] = useState("");
+  /** 自定义服务商的接口地址与模型名输入；只在首次就绪时用服务值初始化。 */
+  const [baseUrlDraft, setBaseUrlDraft] = useState("");
+  const [modelDraft, setModelDraft] = useState("");
+  const [endpointDraftLoaded, setEndpointDraftLoaded] = useState(false);
   const [quickDueEditor, setQuickDueEditor] = useState<QuickDueEditorState | null>(null);
   const [renamingCustomer, setRenamingCustomer] = useState<string | null>(null);
   const [directoryPreview, setDirectoryPreview] = useState<DirectoryChangePreview | null>(null);
@@ -252,6 +259,15 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
       setReminderTimeLoaded(true);
     }
   }, [reminderTimeLoaded, snapshot, state.phase]);
+
+  // 自定义接口地址与模型名同样只初始化一次，避免自动保存后把正在输入的内容顶掉。
+  useEffect(() => {
+    if (state.phase === "ready" && !endpointDraftLoaded && snapshot) {
+      setBaseUrlDraft(snapshot.settings.aiBaseUrl);
+      setModelDraft(snapshot.settings.aiModel);
+      setEndpointDraftLoaded(true);
+    }
+  }, [endpointDraftLoaded, snapshot, state.phase]);
 
   const applyUpdate = useCallback(
     async (patch: Partial<AppSettings>) => {
@@ -378,6 +394,49 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
     [applyUpdate, interactionBusy],
   );
 
+  /** 失焦时提交自定义接口地址/模型名：就地校验，非法值保留输入并提示，不写服务。 */
+  const commitCustomField = useCallback(
+    (field: "aiBaseUrl" | "aiModel") => {
+      if (interactionBusy || !settings) return;
+      if (field === "aiBaseUrl") {
+        const parsed = validateAiBaseUrl(baseUrlDraft);
+        if (!parsed.ok) {
+          core.setMessage({ tone: "error", text: parsed.error });
+          return;
+        }
+        if (parsed.baseUrl !== settings.aiBaseUrl) {
+          void applyUpdate({ aiBaseUrl: parsed.baseUrl });
+        }
+        return;
+      }
+      const parsed = validateAiModel(modelDraft);
+      if (!parsed.ok) {
+        core.setMessage({ tone: "error", text: parsed.error });
+        return;
+      }
+      if (parsed.model !== settings.aiModel) {
+        void applyUpdate({ aiModel: parsed.model });
+      }
+    },
+    [applyUpdate, baseUrlDraft, core, interactionBusy, modelDraft, settings],
+  );
+
+  /** Agnes 预设：一次点击填好地址与模型名并直接保存。 */
+  const applyAgnesPreset = useCallback(() => {
+    if (interactionBusy) return;
+    setBaseUrlDraft(AGNES_PRESET.baseUrl);
+    setModelDraft(AGNES_PRESET.model);
+    void (async () => {
+      const result = await core.update({
+        aiBaseUrl: AGNES_PRESET.baseUrl,
+        aiModel: AGNES_PRESET.model,
+      });
+      if (result.ok) {
+        core.setMessage({ tone: "success", text: settingsTexts.aiAgnesPresetApplied });
+      }
+    })();
+  }, [core, interactionBusy]);
+
   const saveApiKey = useCallback(() => {
     if (interactionBusy) return;
     const key = keyDraft.trim();
@@ -473,6 +532,11 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
         savedReminderTime: settings.dailyReminderTime,
         dailyReminderEnabled: settings.dailyReminderEnabled,
         apiKeyDraft: keyDraft,
+        aiProvider: settings.aiProvider,
+        savedAiBaseUrl: settings.aiBaseUrl,
+        savedAiModel: settings.aiModel,
+        aiBaseUrlDraft: baseUrlDraft,
+        aiModelDraft: modelDraft,
         quickDueEditorOpen: quickDueEditor !== null,
         customerRenaming: renamingCustomer !== null,
       }),
@@ -684,6 +748,12 @@ export default function SettingsPage({ services, onBack, onChanged, floatingBall
               busy={interactionBusy}
               draft={keyDraft}
               onDraftChange={(value) => { if (!interactionBusy) setKeyDraft(value); }}
+              baseUrlDraft={baseUrlDraft}
+              modelDraft={modelDraft}
+              onBaseUrlDraftChange={(value) => { if (!interactionBusy) setBaseUrlDraft(value); }}
+              onModelDraftChange={(value) => { if (!interactionBusy) setModelDraft(value); }}
+              onBlurCustomField={commitCustomField}
+              onApplyAgnesPreset={applyAgnesPreset}
               onProviderChange={handleProviderChange}
               onSaveKey={saveApiKey}
               onRequestClearKey={requestClearApiKey}

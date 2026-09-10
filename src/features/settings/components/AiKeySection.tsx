@@ -5,6 +5,7 @@ const providerOptions: { value: AiProvider; label: string; keyLabel: string }[] 
   { value: "deepseek", label: settingsTexts.aiProviderDeepseek, keyLabel: "DeepSeek" },
   { value: "qwen", label: settingsTexts.aiProviderQwen, keyLabel: "Qwen" },
   { value: "glm", label: settingsTexts.aiProviderGlm, keyLabel: "智谱" },
+  { value: "custom", label: settingsTexts.aiProviderCustom, keyLabel: "自定义服务" },
 ];
 
 interface AiKeySectionProps {
@@ -13,7 +14,17 @@ interface AiKeySectionProps {
   busy: boolean;
   /** 当前新 Key 输入；状态提升以便返回前判断未提交输入，切换服务商时清空。 */
   draft: string;
+  /** 自定义服务商的接口基地址输入；内置服务商不使用。 */
+  baseUrlDraft: string;
+  /** 自定义服务商的模型名输入；内置服务商不使用。 */
+  modelDraft: string;
   onDraftChange(value: string): void;
+  onBaseUrlDraftChange(value: string): void;
+  onModelDraftChange(value: string): void;
+  /** 失焦时提交对应字段：页面负责校验与保存。 */
+  onBlurCustomField(field: "aiBaseUrl" | "aiModel"): void;
+  /** 一键填入 Agnes 预设的地址与模型名。 */
+  onApplyAgnesPreset(): void;
   onProviderChange(provider: AiProvider): void;
   onSaveKey(): void;
   onRequestClearKey(): void;
@@ -24,7 +35,13 @@ export default function AiKeySection({
   keyConfigured,
   busy,
   draft,
+  baseUrlDraft,
+  modelDraft,
   onDraftChange,
+  onBaseUrlDraftChange,
+  onModelDraftChange,
+  onBlurCustomField,
+  onApplyAgnesPreset,
   onProviderChange,
   onSaveKey,
   onRequestClearKey,
@@ -86,6 +103,46 @@ export default function AiKeySection({
           {settingsTexts.clear}
         </button>
       </div>
+      {provider === "custom" && (
+        <>
+          <label className="settings-field">
+            <span className="settings-row-hint">{settingsTexts.aiBaseUrlLabel}</span>
+            <input
+              className="settings-input"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={settingsTexts.aiBaseUrlPlaceholder}
+              aria-label={settingsTexts.aiBaseUrlLabel}
+              value={baseUrlDraft}
+              disabled={busy}
+              onChange={(event) => onBaseUrlDraftChange(event.target.value)}
+              onBlur={() => onBlurCustomField("aiBaseUrl")}
+            />
+          </label>
+          <label className="settings-field">
+            <span className="settings-row-hint">{settingsTexts.aiModelLabel}</span>
+            <input
+              className="settings-input"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={settingsTexts.aiModelPlaceholder}
+              aria-label={settingsTexts.aiModelLabel}
+              value={modelDraft}
+              disabled={busy}
+              onChange={(event) => onModelDraftChange(event.target.value)}
+              onBlur={() => onBlurCustomField("aiModel")}
+            />
+          </label>
+          <div className="settings-input-row">
+            <button className="settings-button" type="button" disabled={busy} onClick={onApplyAgnesPreset}>
+              {settingsTexts.aiAgnesPreset}
+            </button>
+          </div>
+          <div className="settings-row-hint">{settingsTexts.aiCustomHint}</div>
+        </>
+      )}
     </div>
   );
 }

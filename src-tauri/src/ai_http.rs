@@ -10,6 +10,12 @@ const MAX_HTTP_RESPONSE_BYTES: usize = 131_072;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiHttpError {
     UnknownProvider,
+    /// 自定义服务商缺少接口地址。
+    MissingEndpoint,
+    /// 自定义服务商缺少模型名。
+    MissingModel,
+    /// 自定义服务商填写的接口地址形状不对。
+    InvalidEndpoint,
     Credentials,
     InvalidRequest,
     Timeout,
@@ -28,6 +34,9 @@ impl std::fmt::Display for AiHttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::UnknownProvider => "不支持的 AI 服务商",
+            Self::MissingEndpoint => "请先在设置中填写接口地址",
+            Self::MissingModel => "请先在设置中填写模型名",
+            Self::InvalidEndpoint => "接口地址无效，请以 http:// 或 https:// 开头并包含主机名",
             Self::Credentials => "API Key 无效或没有该模型的使用权限，请检查设置",
             Self::InvalidRequest => "AI 请求配置无效，请检查服务设置",
             Self::Timeout => "AI 请求超时，请稍后手动重试",
@@ -45,46 +54,162 @@ impl std::fmt::Display for AiHttpError {
 }
 impl std::error::Error for AiHttpError {}
 
-fn provider_endpoint(provider: &str) -> Result<&'static str, AiHttpError> {
-    match provider {
-        "deepseek" => Ok("https://api.deepseek.com/chat/completions"),
-        "qwen" => Ok("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
-        "glm" => Ok("https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        _ => Err(AiHttpError::UnknownProvider),
+/// 内置服务商的固定端点与模型档位。自定义服务商不使用这张表。
+struct BuiltinProvider {
+    endpoint: &'static str,
+    text_model: &'static str,
+    vision_model: &'static str,
+}
+
+fn builtin_provider(provider: &str) -> Option<BuiltinProvider> {
+    Some(match provider {
+        "deepseek" => BuiltinProvider {
+            endpoint: "https://api.deepseek.com/chat/completions",
+            text_model: "deepseek-v4-flash",
+            vision_model: "deepseek-v4-flash-vision-exp",
+        },
+        "qwen" => BuiltinProvider {
+            endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            text_model: "qwen3.8-flash",
+            vision_model: "qwen-vl-max",
+        },
+        "glm" => BuiltinProvider {
+            endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            text_model: "glm-5.3-flash",
+            vision_model: "glm-4.5v",
+        },
+        _ => return None,
+    })
+}
+
+/// 一次请求的目标：服务商、完整端点、文本模型与视觉模型。
+///
+/// 内置三家沿用官方固定域名与官方模型，不接受外部地址；custom 完全由用户
+/// 填写的基地址与模型名决定，因此也允许 http，便于接本地（Ollama、LM Studio）
+/// 或内网中转服务。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiTarget {
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    pub vision_model: String,
+}
+
+impl AiTarget {
+    pub fn resolve(provider: &str, base_url: &str, model: &str) -> Result<Self, AiHttpError> {
+        if let Some(builtin) = builtin_provider(provider) {
+            return Ok(Self {
+                provider: provider.to_string(),
+                endpoint: builtin.endpoint.to_string(),
+                model: builtin.text_model.to_string(),
+                vision_model: builtin.vision_model.to_string(),
+            });
+        }
+        if provider != "custom" {
+            return Err(AiHttpError::UnknownProvider);
+        }
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(AiHttpError::MissingModel);
+        }
+        Ok(Self {
+            provider: "custom".to_string(),
+            endpoint: custom_endpoint(base_url)?,
+            // 自定义服务商只有一个模型名，文本与截图都用它；模型不支持图片时
+            // 请求会失败，由上层退回 Windows OCR 文字识别。
+            vision_model: model.to_string(),
+            model: model.to_string(),
+        })
+    }
+}
+
+/// 把用户填写的基地址补成 chat/completions 端点。
+///
+/// 三种写法都支持：已经写到 `/chat/completions` 的原样使用；只填主机名
+/// （如 `https://apihub.agnes-ai.com`）按 OpenAI 兼容约定补 `/v1`；
+/// 其余（如 `https://apihub.agnes-ai.com/v1`）补 `/chat/completions`。
+fn custom_endpoint(base_url: &str) -> Result<String, AiHttpError> {
+    let text = base_url.trim().trim_end_matches('/');
+    if text.is_empty() {
+        return Err(AiHttpError::MissingEndpoint);
+    }
+    let lower = text.to_ascii_lowercase();
+    // 前缀固定为 ASCII，按字节长度切分不会落在多字节字符中间。
+    let scheme_len = if lower.starts_with("https://") {
+        "https://".len()
+    } else if lower.starts_with("http://") {
+        "http://".len()
+    } else {
+        return Err(AiHttpError::InvalidEndpoint);
+    };
+    let host_and_path = &text[scheme_len..];
+    if host_and_path
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Err(AiHttpError::InvalidEndpoint);
+    }
+    if lower.ends_with("/chat/completions") {
+        return Ok(text.to_string());
+    }
+    if !host_and_path.contains('/') {
+        return Ok(format!("{text}/v1/chat/completions"));
+    }
+    Ok(format!("{text}/chat/completions"))
+}
+
+/// 输出上限。custom 取与 glm 同档的较大值：中转与自建模型的上下文差异大，
+/// 给足空间比中途截断更安全。
+fn token_limit(provider: &str, vision: bool) -> i64 {
+    match (provider, vision) {
+        ("deepseek", false) | ("qwen", false) => 1024,
+        ("deepseek", true) | ("qwen", true) => 2048,
+        _ => 4096,
     }
 }
 
 // 参数沿用 2026-09-05 本地虚构样例已测组合，不能把一种服务商的思考开关套给另一家。
-fn request_body(provider: &str, messages: &PromptMessages) -> Result<Value, AiHttpError> {
-    let (model, limit) = match provider {
-        "deepseek" => ("deepseek-v4-flash", 1024),
-        "qwen" => ("qwen3.8-flash", 1024),
-        "glm" => ("glm-5.3-flash", 4096),
-        _ => return Err(AiHttpError::UnknownProvider),
-    };
+//
+// custom 不附加 response_format 与思考开关：第三方与中转实现的支持面差异大，
+// 多余的字段容易被判成无效请求；提示词本身已要求只返回 JSON，
+// 解析层也接受围栏代码块，因此省略这些字段更稳妥。
+fn request_body(target: &AiTarget, messages: &PromptMessages) -> Result<Value, AiHttpError> {
     let mut value = json!({
-        "model":model, "stream":false, "max_tokens":limit,
-        "response_format":{"type":"json_object"},
-        "messages":[{"role":"system","content":messages.system},{"role":"user","content":messages.user}]
+        "model": target.model,
+        "stream": false,
+        "max_tokens": token_limit(&target.provider, false),
+        "messages": [
+            {"role":"system","content":messages.system},
+            {"role":"user","content":messages.user}
+        ]
     });
-    match provider {
-        "deepseek" => value["thinking"] = json!({"type":"disabled"}),
-        "qwen" => value["enable_thinking"] = json!(false),
-        "glm" => value["reasoning_effort"] = json!("low"),
-        _ => unreachable!(),
+    match target.provider.as_str() {
+        "deepseek" => {
+            value["response_format"] = json!({"type":"json_object"});
+            value["thinking"] = json!({"type":"disabled"});
+        }
+        "qwen" => {
+            value["response_format"] = json!({"type":"json_object"});
+            value["enable_thinking"] = json!(false);
+        }
+        "glm" => {
+            value["response_format"] = json!({"type":"json_object"});
+            value["reasoning_effort"] = json!("low");
+        }
+        _ => {}
     }
     Ok(value)
 }
 
 /// 视觉直传请求体：各家视觉模型（OpenAI 兼容 image_url）；模型名取官方视觉档，
 /// 参数尽量少（不附加 JSON 模式与思考开关，避免视觉模型不支持的字段）。
-fn request_vision_body(provider: &str, messages: &PromptMessages, images: &[String]) -> Result<Value, AiHttpError> {
-    let (model, limit) = match provider {
-        "deepseek" => ("deepseek-v4-flash-vision-exp", 2048),
-        "qwen" => ("qwen-vl-max", 2048),
-        "glm" => ("glm-4.5v", 4096),
-        _ => return Err(AiHttpError::UnknownProvider),
-    };
+fn request_vision_body(
+    target: &AiTarget,
+    messages: &PromptMessages,
+    images: &[String],
+) -> Result<Value, AiHttpError> {
     let mut user_content: Vec<Value> = vec![json!({"type":"text","text":messages.user})];
     for image in images {
         user_content.push(json!({
@@ -93,8 +218,13 @@ fn request_vision_body(provider: &str, messages: &PromptMessages, images: &[Stri
         }));
     }
     Ok(json!({
-        "model":model, "stream":false, "max_tokens":limit,
-        "messages":[{"role":"system","content":messages.system},{"role":"user","content":user_content}]
+        "model": target.vision_model,
+        "stream": false,
+        "max_tokens": token_limit(&target.provider, true),
+        "messages": [
+            {"role":"system","content":messages.system},
+            {"role":"user","content":user_content}
+        ]
     }))
 }
 
@@ -119,18 +249,20 @@ impl AiHttp {
         messages: &PromptMessages,
     ) -> Result<String, AiHttpError> {
         assert!(endpoint.starts_with("http://127.0.0.1:"));
+        let target = AiTarget::resolve(provider, "", "")?;
         Self {
             client: client_builder(Duration::from_secs(3))
                 .no_proxy()
                 .build()
                 .unwrap(),
         }
-        .send(endpoint, key, &request_body(provider, messages)?)
+        .send(endpoint, key, &request_body(&target, messages)?)
     }
     pub fn new() -> Result<Self, AiHttpError> {
         Ok(Self {
+            // 不限制 https：自定义服务商允许指向本地或内网中转的 http 地址，
+            // 地址形状与协议由 AiTarget::resolve 先校验。
             client: client_builder(Duration::from_secs(30))
-                .https_only(true)
                 .build()
                 .map_err(|_| AiHttpError::InvalidRequest)?,
         })
@@ -139,7 +271,7 @@ impl AiHttp {
     /// 视觉直传：图片走 image_url；失败原因原样返回，由上层决定是否降级。
     pub fn complete_vision(
         &self,
-        provider: &str,
+        target: &AiTarget,
         key: &str,
         messages: &PromptMessages,
         images: &[String],
@@ -147,23 +279,24 @@ impl AiHttp {
         if images.is_empty() {
             return Err(AiHttpError::InvalidRequest);
         }
-        self.send(provider_endpoint(provider)?, key, &request_vision_body(provider, messages, images)?)
+        self.send(
+            &target.endpoint,
+            key,
+            &request_vision_body(target, messages, images)?,
+        )
     }
 
     pub fn complete(
         &self,
-        provider: &str,
+        target: &AiTarget,
         key: &str,
         messages: &PromptMessages,
     ) -> Result<String, AiHttpError> {
-        self.send(
-            provider_endpoint(provider)?,
-            key,
-            &request_body(provider, messages)?,
-        )
+        self.send(&target.endpoint, key, &request_body(target, messages)?)
     }
 
-    // 端点由 complete 中的固定映射提供，不向前端开放任意 URL。
+    // 端点已在 AiTarget::resolve 中确定：内置三家来自固定表，custom 来自用户填写
+    // 且已通过形状校验的基地址；这里的 send 只负责发请求。
     fn send(&self, endpoint: &str, key: &str, body: &Value) -> Result<String, AiHttpError> {
         let key = key.trim();
         if key.is_empty()
@@ -360,30 +493,89 @@ pub(crate) mod tests {
             ("qwen", "qwen3.8-flash", 1024),
             ("glm", "glm-5.3-flash", 4096),
         ] {
-            let value = request_body(id, &messages()).unwrap();
+            let target = AiTarget::resolve(id, "", "").unwrap();
+            let value = request_body(&target, &messages()).unwrap();
             assert_eq!(value["model"], model);
             assert_eq!(value["max_tokens"], limit);
             assert_eq!(value["stream"], false);
             assert_eq!(value["response_format"]["type"], "json_object");
             assert_eq!(value["messages"][0]["role"], "system");
             assert_eq!(value["messages"][1]["content"], messages().user);
-            assert!(provider_endpoint(id).unwrap().starts_with("https://"));
+            assert!(target.endpoint.starts_with("https://"));
         }
         assert_eq!(
-            request_body("deepseek", &messages()).unwrap()["thinking"]["type"],
+            request_body(&AiTarget::resolve("deepseek", "", "").unwrap(), &messages()).unwrap()
+                ["thinking"]["type"],
             "disabled"
         );
         assert_eq!(
-            request_body("qwen", &messages()).unwrap()["enable_thinking"],
+            request_body(&AiTarget::resolve("qwen", "", "").unwrap(), &messages()).unwrap()
+                ["enable_thinking"],
             false
         );
-        let glm = request_body("glm", &messages()).unwrap();
+        let glm = request_body(&AiTarget::resolve("glm", "", "").unwrap(), &messages()).unwrap();
         assert_eq!(glm["reasoning_effort"], "low");
         assert!(glm.get("thinking").is_none());
         assert_eq!(
-            provider_endpoint("unknown"),
+            AiTarget::resolve("unknown", "", ""),
             Err(AiHttpError::UnknownProvider)
         );
+    }
+
+    #[test]
+    fn custom_provider_resolves_base_url_and_allows_plain_http() {
+        let target =
+            AiTarget::resolve("custom", "https://apihub.agnes-ai.com/v1", "agnes-2.0-flash")
+                .unwrap();
+        assert_eq!(
+            target.endpoint,
+            "https://apihub.agnes-ai.com/v1/chat/completions"
+        );
+        assert_eq!(target.model, "agnes-2.0-flash");
+        // 自定义服务商只有一个模型名，文本与截图共用。
+        assert_eq!(target.vision_model, "agnes-2.0-flash");
+        // 只填主机名按 OpenAI 兼容约定补 /v1；已写到 /chat/completions 的原样使用，末尾斜杠去掉。
+        assert_eq!(
+            AiTarget::resolve("custom", "https://apihub.agnes-ai.com", "m")
+                .unwrap()
+                .endpoint,
+            "https://apihub.agnes-ai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            AiTarget::resolve("custom", "https://example.com/v1/chat/completions/", "m")
+                .unwrap()
+                .endpoint,
+            "https://example.com/v1/chat/completions"
+        );
+        // 放开 http：本地 Ollama / LM Studio 与公司内网中转都要能连。
+        assert_eq!(
+            AiTarget::resolve("custom", "http://127.0.0.1:11434/v1", "qwen2.5")
+                .unwrap()
+                .endpoint,
+            "http://127.0.0.1:11434/v1/chat/completions"
+        );
+        // 缺地址、缺模型、协议或主机名不对一律拒绝。
+        assert_eq!(
+            AiTarget::resolve("custom", "", "m"),
+            Err(AiHttpError::MissingEndpoint)
+        );
+        assert_eq!(
+            AiTarget::resolve("custom", "https://a.com/v1", " "),
+            Err(AiHttpError::MissingModel)
+        );
+        for base in ["apihub.agnes-ai.com/v1", "https://", "ftp://example.com/v1"] {
+            assert_eq!(
+                AiTarget::resolve("custom", base, "m"),
+                Err(AiHttpError::InvalidEndpoint),
+                "{base}"
+            );
+        }
+        // custom 不附加 response_format 与思考开关，兼容面更大。
+        let body = request_body(&target, &messages()).unwrap();
+        assert!(body.get("response_format").is_none());
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["model"], "agnes-2.0-flash");
+        assert_eq!(body["max_tokens"], 4096);
     }
 
     #[test]
@@ -399,7 +591,8 @@ pub(crate) mod tests {
                 kind: crate::ai_extract::InputKind::Ocr,
             };
             let messages = crate::ai_extract::build_vision_messages("", &ctx).unwrap();
-            let body = request_vision_body(provider, &messages, &[IMG.to_string()]).unwrap();
+            let target = AiTarget::resolve(provider, "", "").unwrap();
+            let body = request_vision_body(&target, &messages, &[IMG.to_string()]).unwrap();
             assert_eq!(body["model"], model, "{provider} visual model");
             assert!(body.get("response_format").is_none(), "{provider} vision 不附加 JSON 模式");
             assert!(body.get("thinking").is_none() && body.get("enable_thinking").is_none(), "{provider} vision 不附加思考开关");
@@ -445,7 +638,7 @@ pub(crate) mod tests {
             .send(
                 &url,
                 "synthetic-key",
-                &request_body("deepseek", &messages()).unwrap(),
+                &request_body(&AiTarget::resolve("deepseek", "", "").unwrap(), &messages()).unwrap(),
             )
             .unwrap();
         assert_eq!(result, "{\"title\":\"虚构初稿\"}");
@@ -509,7 +702,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn invalid_keys_and_plain_http_are_rejected_without_sending() {
+    fn invalid_keys_are_rejected_before_any_request_is_sent() {
         let client = AiHttp::new().unwrap();
         assert_eq!(
             client.send("http://127.0.0.1:1", "", &json!({})),
@@ -520,8 +713,8 @@ pub(crate) mod tests {
             Err(AiHttpError::Credentials)
         );
         assert_eq!(
-            client.send("http://127.0.0.1:1", "synthetic-key", &json!({})),
-            Err(AiHttpError::InvalidRequest)
+            client.send("http://127.0.0.1:1", "非 ASCII 的 key", &json!({})),
+            Err(AiHttpError::Credentials)
         );
     }
 

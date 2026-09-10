@@ -17,6 +17,7 @@ impl KeyStore {
             "deepseek"
                 | "qwen"
                 | "glm"
+                | "custom"
                 | "official-session"
                 | "official-order"
                 | "official-extraction"

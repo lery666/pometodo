@@ -26,7 +26,7 @@ pub(crate) fn snapshot(
     let repo = &storage.repo;
     let keys = KeyStore::new(&storage.profile_directory.join("secrets"));
     let mut key_configured = BTreeMap::new();
-    for provider in ["deepseek", "qwen", "glm"] {
+    for provider in ["deepseek", "qwen", "glm", "custom"] {
         key_configured.insert(provider.into(), keys.configured(provider)?);
     }
     let mut settings = repo.settings()?;
@@ -156,7 +156,7 @@ pub async fn pometodo_key_save(
     let app_copy = app.clone();
     with_storage(app, move |storage| {
         let mut result = snapshot(&app_copy, storage)?;
-        if !matches!(provider.as_str(), "deepseek" | "qwen" | "glm") {
+        if !matches!(provider.as_str(), "deepseek" | "qwen" | "glm" | "custom") {
             return Err("不支持的 AI 服务商".into());
         }
         KeyStore::new(&storage.profile_directory.join("secrets")).save(&provider, &key)?;
@@ -174,7 +174,7 @@ pub async fn pometodo_key_clear(
     let app_copy = app.clone();
     with_storage(app, move |storage| {
         let mut result = snapshot(&app_copy, storage)?;
-        if !matches!(provider.as_str(), "deepseek" | "qwen" | "glm") {
+        if !matches!(provider.as_str(), "deepseek" | "qwen" | "glm" | "custom") {
             return Err("不支持的 AI 服务商".into());
         }
         KeyStore::new(&storage.profile_directory.join("secrets")).clear(&provider)?;

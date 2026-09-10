@@ -5,6 +5,25 @@ use pometodo_core::{
 };
 use serde::Serialize;
 
+/// 自带 Key 模式下一次识别所需的全部信息。
+///
+/// 内置三家只需 provider + key；自定义服务商（custom）还需要用户填写的
+/// 接口基地址与模型名，因此一起读出来，避免调用点再回头读设置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAiSelection {
+    pub provider: String,
+    pub key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+impl UserAiSelection {
+    /// 解析成本次请求的目标（端点、文本模型、视觉模型）。
+    pub fn target(&self) -> Result<crate::ai_http::AiTarget, crate::ai_http::AiHttpError> {
+        crate::ai_http::AiTarget::resolve(&self.provider, &self.base_url, &self.model)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartArrangeSnapshot {
@@ -20,18 +39,33 @@ pub fn require_enabled(preferences: &SmartArrangePreferences) -> Result<(), Stri
     Ok(())
 }
 
-pub fn selected_user_key(storage: &LocalStorage) -> Result<(String, String), String> {
+pub fn selected_user_key(storage: &LocalStorage) -> Result<UserAiSelection, String> {
     let preferences =
         crate::distribution::effective_preferences(storage.repo.smart_arrange_preferences()?);
     require_enabled(&preferences)?;
     if preferences.source != SmartArrangeSource::Byok {
         return Err("请先登录并开通官方智能整理".into());
     }
-    let provider = storage.repo.settings()?.ai_provider;
+    let settings = storage.repo.settings()?;
+    let provider = settings.ai_provider;
     let key = KeyStore::new(&storage.profile_directory.join("secrets"))
         .read(&provider)?
         .ok_or_else(|| "请在设置中保存所选服务商的 API Key".to_string())?;
-    Ok((provider, key))
+    // 自定义服务商缺地址或模型名时先给出可读提示，不必等到请求失败。
+    if provider == "custom" {
+        if settings.ai_base_url.trim().is_empty() {
+            return Err("请先在设置中填写接口地址".into());
+        }
+        if settings.ai_model.trim().is_empty() {
+            return Err("请先在设置中填写模型名".into());
+        }
+    }
+    Ok(UserAiSelection {
+        provider,
+        key,
+        base_url: settings.ai_base_url,
+        model: settings.ai_model,
+    })
 }
 
 fn snapshot(storage: &LocalStorage) -> Result<SmartArrangeSnapshot, String> {
@@ -155,6 +189,51 @@ mod tests {
         assert_eq!(
             selected_user_key(&storage).unwrap_err(),
             "请在设置中保存所选服务商的 API Key"
+        );
+    }
+
+    #[test]
+    fn custom_provider_requires_endpoint_and_model_before_calling_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = LocalStorage::open(dir.path()).unwrap();
+        storage
+            .repo
+            .set_smart_arrange_preferences(SmartArrangePreferences {
+                enabled: true,
+                source: SmartArrangeSource::Byok,
+            })
+            .unwrap();
+        crate::secrets::KeyStore::new(&storage.profile_directory.join("secrets"))
+            .save("custom", "synthetic-only-key")
+            .unwrap();
+        storage
+            .repo
+            .update_settings(serde_json::json!({"aiProvider":"custom"}))
+            .unwrap();
+        // 地址与模型名缺失时给出可读提示，而不是把请求发到空地址。
+        assert_eq!(
+            selected_user_key(&storage).unwrap_err(),
+            "请先在设置中填写接口地址"
+        );
+        storage
+            .repo
+            .update_settings(serde_json::json!({"aiBaseUrl":"http://127.0.0.1:11434/v1"}))
+            .unwrap();
+        assert_eq!(
+            selected_user_key(&storage).unwrap_err(),
+            "请先在设置中填写模型名"
+        );
+        storage
+            .repo
+            .update_settings(serde_json::json!({"aiModel":"qwen2.5"}))
+            .unwrap();
+        let selection = selected_user_key(&storage).unwrap();
+        assert_eq!(selection.provider, "custom");
+        assert_eq!(selection.model, "qwen2.5");
+        // 本地 http 端点要能一路拼到 chat/completions。
+        assert_eq!(
+            selection.target().unwrap().endpoint,
+            "http://127.0.0.1:11434/v1/chat/completions"
         );
     }
 }

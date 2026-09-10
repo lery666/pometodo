@@ -2,6 +2,7 @@ use crate::{
     ai_extract::{self, ExtractionContext, ExtractionWarning, InputKind, ParsedExtraction},
     ai_http::AiHttp,
     commands::StorageState,
+    smart_arrange::UserAiSelection,
 };
 use base64::Engine;
 use image::ImageEncoder;
@@ -104,18 +105,19 @@ fn finish_recognition(
 }
 
 fn extract_with_user_key(
-    provider: &str,
-    key: &str,
+    selection: &UserAiSelection,
     text: &str,
     context: &ExtractionContext,
     vision: Option<&[String]>,
 ) -> Result<Option<ParsedExtraction>, String> {
+    // 端点与模型在此确定：内置三家取固定表，custom 取用户填写的地址与模型名。
+    let target = selection.target().map_err(|error| error.to_string())?;
     if let Some(images) = vision {
         // 视觉直传：AI 直接看图（与官方同思路，准确率最高）；失败由调用方退回 OCR 文本。
         let messages = crate::ai_extract::build_vision_messages(text, context).map_err(|error| error.to_string())?;
         static HTTP_VISION: OnceLock<Result<AiHttp, crate::ai_http::AiHttpError>> = OnceLock::new();
         let content = HTTP_VISION.get_or_init(AiHttp::new).as_ref().map_err(ToString::to_string)?
-            .complete_vision(provider, key, &messages, images).map_err(|error| error.to_string())?;
+            .complete_vision(&target, &selection.key, &messages, images).map_err(|error| error.to_string())?;
         return crate::ai_extract::parse_response(&content, context).map(Some).map_err(|error| error.to_string());
     }
     extract_text(text, context, |messages| {
@@ -123,7 +125,7 @@ fn extract_with_user_key(
         HTTP.get_or_init(AiHttp::new)
             .as_ref()
             .map_err(ToString::to_string)?
-            .complete(provider, key, messages)
+            .complete(&target, &selection.key, messages)
             .map_err(|error| error.to_string())
     })
 }
@@ -395,6 +397,26 @@ pub async fn pometodo_import_attachment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 内置服务商的自带 Key 选择：不需要地址与模型名。
+    fn byok_selection(provider: &str) -> UserAiSelection {
+        UserAiSelection {
+            provider: provider.into(),
+            key: "byok-key".into(),
+            base_url: String::new(),
+            model: String::new(),
+        }
+    }
+
+    /// 官方智能整理：不使用自带 Key，也没有自定义地址。
+    fn official_selection() -> UserAiSelection {
+        UserAiSelection {
+            provider: "official".into(),
+            key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+        }
+    }
     use crate::ai_extract::{ExtractionWarning, ParsedExtraction};
     #[test]
     fn imported_image_is_validated_before_storage() {
@@ -481,7 +503,7 @@ mod tests {
         // 直传成功：complete 收到图片 base64。
         let mut saw_vision = false;
         let result = arrange_clipboard(
-            || Ok(("official".into(), String::new())),
+            || Ok(official_selection()),
             || {
                 Ok(ClipboardInput {
                     text: String::new(),
@@ -497,7 +519,7 @@ mod tests {
                 assert_eq!(id, "img");
                 Ok(vec!["BASE64PNG".into()])
             },
-            |_, _, _, _, vision| {
+            |_, _, _, vision| {
                 assert_eq!(vision, Some(&["BASE64PNG".to_string()][..]));
                 saw_vision = true;
                 Ok(Some(base.clone()))
@@ -513,7 +535,7 @@ mod tests {
         // 直传失败（模型/网络错误或截图无法处理）：直接报错，不降级为整屏 OCR 文本。
         let mut calls = 0;
         let result = arrange_clipboard(
-            || Ok(("official".into(), String::new())),
+            || Ok(official_selection()),
             || {
                 Ok(ClipboardInput {
                     text: String::new(),
@@ -522,7 +544,7 @@ mod tests {
             },
             |_| panic!("official 直传路径不得使用本地 OCR"),
             |_| Ok(vec!["BASE64PNG".into()]),
-            |_, _, _, _, vision| {
+            |_, _, _, vision| {
                 calls += 1;
                 assert!(vision.is_some(), "只允许带图调用");
                 Err("直传失败".into())
@@ -542,7 +564,7 @@ mod tests {
     fn official_vision_failure_via_processing_never_falls_back_to_text() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap();
         let result = arrange_clipboard(
-            || Ok(("official".into(), String::new())),
+            || Ok(official_selection()),
             || {
                 Ok(ClipboardInput {
                     text: String::new(),
@@ -551,7 +573,7 @@ mod tests {
             },
             |_| panic!("official 路径不得使用本地 OCR"),
             |_| Err("图片解码失败".into()),
-            |_, _, _, _, _| panic!("截图处理失败不得继续调用模型"),
+            |_, _, _, _| panic!("截图处理失败不得继续调用模型"),
             now,
         );
         let value = serde_json::to_value(result.unwrap()).unwrap();
@@ -616,11 +638,11 @@ mod tests {
             warnings: vec![],
         };
         let result = arrange_clipboard(
-            || Ok(("qwen".into(), "byok-key".into())),
+            || Ok(byok_selection("qwen")),
             || Ok(ClipboardInput { text: String::new(), attachment: Some("img".into()) }),
             |_| panic!("视觉直传成功时不得使用本地 OCR"),
             |id| { assert_eq!(id, "img"); Ok(vec!["BASE64PNG".into()]) },
-            |_, _, _, _, vision| {
+            |_, _, _, vision| {
                 assert_eq!(vision, Some(&["BASE64PNG".to_string()][..]));
                 Ok(Some(parsed.clone()))
             },
@@ -636,7 +658,7 @@ mod tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap();
         let mut calls = 0;
         let result = arrange_clipboard(
-            || Ok(("glm".into(), "byok-key".into())),
+            || Ok(byok_selection("glm")),
             || Ok(ClipboardInput { text: String::new(), attachment: Some("img".into()) }),
             |_| {
                 let mut document = crate::local_extract::LocalDocument::default();
@@ -644,7 +666,7 @@ mod tests {
                 Ok(document)
             },
             |_| Err("模型无视觉权限".into()),
-            |_, _, _, _, vision| {
+            |_, _, _, vision| {
                 calls += 1;
                 assert!(vision.is_none(), "降级路径不带图");
                 Ok(Some(ParsedExtraction { customer_name: None, title: Some("核对初稿".into()), note: None, received_at: None, due_at: None, warnings: vec![] }))
@@ -663,7 +685,7 @@ mod tests {
             || panic!("must not read clipboard"),
             |_| panic!("must not OCR"),
             |_| panic!("must not read vision"),
-            |_, _, _, _, _| panic!("must not call model"),
+            |_, _, _, _| panic!("must not call model"),
             now,
         );
         assert!(matches!(result, Err(message) if message == "智能整理尚未开启"));
@@ -727,8 +749,8 @@ mod tests {
                         assert!(image_input);
                         Err("vision_not_available".into())
                     },
-                    |selected, key, text, context, _vision| {
-                        assert_eq!(selected, provider);
+                    |selected, text, context, _vision| {
+                        assert_eq!(selected.provider, provider);
                         assert_eq!(
                             context.kind,
                             if image_input {
@@ -738,8 +760,13 @@ mod tests {
                             }
                         );
                         extract_text(text, context, |messages| {
-                            AiHttp::complete_loopback(&url, selected, key, messages)
-                                .map_err(|e| e.to_string())
+                            AiHttp::complete_loopback(
+                                &url,
+                                &selected.provider,
+                                &selected.key,
+                                messages,
+                            )
+                            .map_err(|e| e.to_string())
                         })
                     },
                     chrono::DateTime::parse_from_rfc3339("2026-09-06T10:00:00+08:00").unwrap(),
@@ -793,20 +820,19 @@ struct ClipboardInput {
 /// 直传失败 → 明确报错，不降级为「整屏 OCR 文本」——无图文本会把左栏界面文字当成聊天内容（串词根源）。
 /// 自带 Key 截图 → OCR 文本路径（自带模型按文字接口处理）；文本剪贴板 → 直接识别。
 fn arrange_clipboard(
-    select: impl FnOnce() -> Result<(String, String), String>,
+    select: impl FnOnce() -> Result<UserAiSelection, String>,
     read: impl FnOnce() -> Result<ClipboardInput, String>,
     ocr: impl FnMut(&str) -> Result<crate::local_extract::LocalDocument, String>,
     vision: impl FnMut(&str) -> Result<Vec<String>, String>,
     complete: impl FnMut(
-        &str,
-        &str,
+        &UserAiSelection,
         &str,
         &ExtractionContext,
         Option<&[String]>,
     ) -> Result<Option<ParsedExtraction>, String>,
     now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<RecognitionResult, String> {
-    let (provider, key) = select()?;
+    let selection = select()?;
     let input = read()?;
     let kind = if input.text.trim().is_empty() {
         InputKind::Ocr
@@ -821,7 +847,7 @@ fn arrange_clipboard(
     let mut complete = complete;
 
     let extracted: Result<Option<ParsedExtraction>, String> = if is_text_mode {
-        complete(&provider, &key, &input.text, &context, None)
+        complete(&selection, &input.text, &context, None)
     } else {
         match input.attachment.as_deref() {
             None => {
@@ -830,22 +856,22 @@ fn arrange_clipboard(
                 })
             }
             Some(id) => {
-                if provider == "official" {
+                if selection.provider == "official" {
                     // 只走原图直传。失败即报错重试，不换无图文本路径（串词隐患）。
                     match vision(id) {
-                        Ok(images) => complete(&provider, &key, "", &context, Some(&images)),
+                        Ok(images) => complete(&selection, "", &context, Some(&images)),
                         Err(error) => Err(format!("截图无法识别：{error}，请重试或换更清晰的截图")),
                     }
                 } else {
                     // 自带 Key：视觉直传优先（AI 直接识图）；任何失败回退 OCR 文本（兼容无视觉模型/中转 key）。
-                    let vision_result = vision(id)
-                        .and_then(|images| complete(&provider, &key, "", &context, Some(&images)));
+                    let vision_result =
+                        vision(id).and_then(|images| complete(&selection, "", &context, Some(&images)));
                     match vision_result {
                         Ok(value) => Ok(value),
                         Err(_) => match ocr(id) {
                             Ok(document) => {
                                 let text = truncate_document(&document.text);
-                                complete(&provider, &key, &text, &context, None)
+                                complete(&selection, &text, &context, None)
                             }
                             Err(error) => Err(error),
                         },
@@ -929,7 +955,12 @@ fn run_recognition(
                 if !available {
                     return Err(message);
                 }
-                return Ok(("official".into(), String::new()));
+                return Ok(UserAiSelection {
+                    provider: "official".into(),
+                    key: String::new(),
+                    base_url: String::new(),
+                    model: String::new(),
+                });
             }
             let state = app.state::<StorageState>();
             let guard = state.inner.lock().map_err(|_| "无法读取智能整理设置")?;
@@ -960,11 +991,11 @@ fn run_recognition(
             };
             prepare_vision_image(&path)
         },
-        |provider, key, text, context, vision| {
-            let result = if provider == "official" {
+        |selection, text, context, vision| {
+            let result = if selection.provider == "official" {
                 crate::service_extension::extract(&root, text, context, vision)
             } else {
-                extract_with_user_key(provider, key, text, context, vision)
+                extract_with_user_key(&selection, text, context, vision)
             };
             // 图片整理失败时给出更具体的引导；网络等其他失败保持原提示。
             result.map_err(|error| {

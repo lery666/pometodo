@@ -18,13 +18,15 @@ const baseSettings: AppSettings = {
   dailyReminderTime: "09:00",
   quickDueOptions: [{ label: "今天", days: 0 }],
   aiProvider: "deepseek",
+  aiBaseUrl: "",
+  aiModel: "",
   customerLabel: "客户",
 };
 
 const baseSnapshot: SettingsSnapshot = {
   settings: baseSettings,
   customers: [{ originalName: "李老板", displayName: "李老板", activeCount: 2 }],
-  keyConfigured: { deepseek: false, qwen: false, glm: false },
+  keyConfigured: { deepseek: false, qwen: false, glm: false, custom: false },
   dataDirectory: "C:\\PomeTodo\\data",
   screenshotDirectory: "C:\\PomeTodo\\screenshots",
   version: "0.1.0",
@@ -46,7 +48,7 @@ function makeServices(overrides: Partial<SettingsServices> = {}): SettingsServic
     update: (patch) => Promise.resolve(makeSnapshot({ settings: { ...baseSettings, ...patch } })),
     renameCustomer: () => Promise.resolve(makeSnapshot()),
     hideCustomer: () => Promise.resolve(makeSnapshot({ customers: [] })),
-    saveApiKey: () => Promise.resolve(makeSnapshot({ keyConfigured: { deepseek: true, qwen: false, glm: false } })),
+    saveApiKey: () => Promise.resolve(makeSnapshot({ keyConfigured: { deepseek: true, qwen: false, glm: false, custom: false } })),
     clearApiKey: () => Promise.resolve(makeSnapshot()),
     chooseDirectory: () => Promise.resolve(null),
     applyDirectoryChange: () =>

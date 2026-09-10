@@ -21,6 +21,13 @@ pub struct AppSettings {
     pub daily_reminder_time: String,
     pub quick_due_options: Vec<QuickDueSetting>,
     pub ai_provider: String,
+    /// 自定义服务商的接口基地址，仅 ai_provider == "custom" 时参与请求。
+    /// 默认空串并允许缺省，保证升级前保存的配置仍能读取。
+    #[serde(default)]
+    pub ai_base_url: String,
+    /// 自定义服务商的模型名，仅 ai_provider == "custom" 时参与请求。
+    #[serde(default)]
+    pub ai_model: String,
     /// “客户”字段的显示名（如“甲方”“项目”），默认“客户”；仅影响界面文案。
     #[serde(default = "default_customer_label")]
     pub customer_label: String,
@@ -54,6 +61,8 @@ impl Default for AppSettings {
             })
             .collect(),
             ai_provider: "deepseek".into(),
+            ai_base_url: String::new(),
+            ai_model: String::new(),
             customer_label: "客户".into(),
         }
     }
@@ -196,6 +205,8 @@ impl AppSettings {
             option.label = option.label.trim().into();
         }
         settings.customer_label = settings.customer_label.trim().into();
+        settings.ai_base_url = settings.ai_base_url.trim().into();
+        settings.ai_model = settings.ai_model.trim().into();
         settings.validate()?;
         Ok(settings)
     }
@@ -207,8 +218,16 @@ impl AppSettings {
         if !matches!(self.close_action.as_str(), "tray" | "exit") {
             return Err("关闭行为无效".into());
         }
-        if !matches!(self.ai_provider.as_str(), "deepseek" | "qwen" | "glm") {
+        if !matches!(
+            self.ai_provider.as_str(),
+            "deepseek" | "qwen" | "glm" | "custom"
+        ) {
             return Err("AI 服务商无效".into());
+        }
+        validate_ai_base_url(&self.ai_base_url)?;
+        // 模型名允许留空（未填完时不阻断设置保存），只约束能安全放进请求体的字符。
+        if self.ai_model.chars().count() > 200 || self.ai_model.chars().any(char::is_control) {
+            return Err("模型名不能超过 200 个字且不能包含控制字符".into());
         }
         let customer_label = self.customer_label.trim();
         if customer_label.is_empty() || customer_label.chars().count() > 12 {
@@ -239,6 +258,44 @@ impl AppSettings {
             }
         }
         Ok(())
+    }
+}
+
+/// 校验自定义服务商的接口基地址。
+///
+/// 允许留空（未填完时不阻断设置保存），只做保守的形状检查：
+/// 必须显式写出 http:// 或 https:// 前缀、带主机名、不含空白与控制字符。
+/// 这里不限定域名，本地与内网中转都需要能填；真正的连接由请求层负责。
+fn validate_ai_base_url(value: &str) -> Result<(), String> {
+    let text = value.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+    if text.chars().count() > 2048 {
+        return Err("接口地址过长，请检查".into());
+    }
+    if text.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("接口地址不能包含空格、换行或控制字符".into());
+    }
+    let after_scheme = strip_prefix_ignore_ascii_case(text, "https://")
+        .or_else(|| strip_prefix_ignore_ascii_case(text, "http://"))
+        .ok_or("接口地址需以 http:// 或 https:// 开头")?;
+    // 取 authority 部分，再看主机名；用户信息（user:pass@host）不计入主机名。
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    if host.split(':').next().unwrap_or("").is_empty() {
+        return Err("接口地址缺少主机名".into());
+    }
+    Ok(())
+}
+
+/// 按 ASCII 忽略大小写去掉前缀；用 get 取切片，避免在多字节字符边界上 panic。
+fn strip_prefix_ignore_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        text.get(prefix.len()..)
+    } else {
+        None
     }
 }
 
@@ -387,5 +444,55 @@ mod tests {
             "示例客户"
         );
         assert_eq!(repo.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn settings_saved_before_custom_endpoint_fields_still_load() {
+        let mut repo = TodoRepository::open_in_memory().unwrap();
+        // 模拟升级前的配置：完全没有 aiBaseUrl / aiModel 两个字段。
+        let legacy = concat!(
+            r#"{"theme":"system","startWithWindows":false,"startMinimized":false,"#,
+            r#""floatingBallEnabled":true,"closeAction":"tray","dailyReminderEnabled":false,"#,
+            r#""dailyReminderTime":"09:00","quickDueOptions":[{"label":"今天","days":0}],"#,
+            r#""aiProvider":"deepseek","customerLabel":"客户"}"#
+        );
+        repo.save_preferences(&[("app_settings", legacy)]).unwrap();
+        let settings = repo.settings().unwrap();
+        assert_eq!(settings.ai_provider, "deepseek");
+        assert!(settings.ai_base_url.is_empty() && settings.ai_model.is_empty());
+    }
+
+    #[test]
+    fn custom_provider_accepts_blank_fields_and_rejects_malformed_addresses() {
+        let mut repo = TodoRepository::open_in_memory().unwrap();
+        // 先切到自定义服务商、地址留空：不阻断保存，避免设置页在填完之前卡死。
+        let saved = repo
+            .update_settings(json!({"aiProvider":"custom"}))
+            .unwrap();
+        assert_eq!(saved.ai_provider, "custom");
+        assert!(saved.ai_base_url.is_empty() && saved.ai_model.is_empty());
+        // 本地回环 http 与带凭据的 https 都要能存，前端才能连自建或内网中转。
+        for url in [
+            "https://apihub.agnes-ai.com/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://192.168.1.8:3000/v1",
+        ] {
+            let saved = repo
+                .update_settings(json!({"aiBaseUrl": url, "aiModel": "agnes-2.0-flash"}))
+                .unwrap();
+            assert_eq!(saved.ai_base_url, url);
+            assert_eq!(saved.ai_model, "agnes-2.0-flash");
+        }
+        let initial = repo.settings().unwrap();
+        for patch in [
+            json!({"aiBaseUrl":"apihub.agnes-ai.com/v1"}),
+            json!({"aiBaseUrl":"https://"}),
+            json!({"aiBaseUrl":"https://a b.c/v1"}),
+            json!({"aiBaseUrl":"ftp://example.com/v1"}),
+            json!({"aiModel":"bad\nmodel"}),
+        ] {
+            assert!(repo.update_settings(patch).is_err());
+            assert_eq!(repo.settings().unwrap(), initial);
+        }
     }
 }

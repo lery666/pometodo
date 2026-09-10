@@ -135,6 +135,11 @@ describe("返回前的未提交输入判断", () => {
     savedReminderTime: "09:00",
     dailyReminderEnabled: true,
     apiKeyDraft: "",
+    aiProvider: "deepseek" as const,
+    savedAiBaseUrl: "",
+    savedAiModel: "",
+    aiBaseUrlDraft: "",
+    aiModelDraft: "",
     quickDueEditorOpen: false,
     customerRenaming: false,
   };
@@ -156,6 +161,26 @@ describe("返回前的未提交输入判断", () => {
     expect(hasUnsavedSettingsInput({ ...clean, apiKeyDraft: "sk-x" })).toBe(true);
     expect(hasUnsavedSettingsInput({ ...clean, quickDueEditorOpen: true })).toBe(true);
     expect(hasUnsavedSettingsInput({ ...clean, customerRenaming: true })).toBe(true);
+  });
+
+  it("自定义服务商比对地址与模型名，内置服务商不比对", () => {
+    const custom = {
+      ...clean,
+      aiProvider: "custom" as const,
+      savedAiBaseUrl: "https://apihub.agnes-ai.com/v1",
+      savedAiModel: "agnes-2.0-flash",
+      aiBaseUrlDraft: "https://apihub.agnes-ai.com/v1",
+      aiModelDraft: "agnes-2.0-flash",
+    };
+    expect(hasUnsavedSettingsInput(custom)).toBe(false);
+    // 前后空白不算改动（保存时会 trim）。
+    expect(hasUnsavedSettingsInput({ ...custom, aiBaseUrlDraft: "  https://apihub.agnes-ai.com/v1  " })).toBe(false);
+    expect(hasUnsavedSettingsInput({ ...custom, aiBaseUrlDraft: "http://127.0.0.1:11434/v1" })).toBe(true);
+    expect(hasUnsavedSettingsInput({ ...custom, aiModelDraft: "qwen2.5" })).toBe(true);
+    // 已经切回内置服务商时，残留的草稿不阻止返回。
+    expect(
+      hasUnsavedSettingsInput({ ...custom, aiProvider: "deepseek", aiBaseUrlDraft: "", aiModelDraft: "" }),
+    ).toBe(false);
   });
 });
 
