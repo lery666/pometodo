@@ -23,7 +23,7 @@ Windows 上的轻量待办工具：记录任务、日期、备注和截图，用
 
 ## 下载或修改
 
-本仓库以源码形式发布，不提供预编译安装包。想直接使用软件，请到[上游发布页](https://github.com/ShiliuX-Team/pometodo/releases)下载官方安装包；想使用本衍生版本的改动，请按下面的步骤自行构建。GitHub 的“Download ZIP”下载的是源码，解压后不能直接当作软件运行。
+想直接使用，可到[本仓库发布页](https://github.com/lery666/pometodo/releases)下载安装包，其中已包含自定义 AI 服务商的改动；需要官方版本，请到[上游发布页](https://github.com/ShiliuX-Team/pometodo/releases)。想自行修改源码，按下面的步骤构建即可。GitHub 的“Download ZIP”下载的是源码，解压后不能直接当作软件运行。
 
 想修改源码，先准备 Node.js 22、pnpm 11、Rust 和 Windows 构建工具，具体见[开发环境](docs/DEVELOPMENT.md#开发环境)，然后在项目根目录运行：
 
