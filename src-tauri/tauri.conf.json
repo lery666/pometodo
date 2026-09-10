@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PomeTodo",
   "version": "0.1.4",
-  "identifier": "com.pome.todo",
+  "identifier": "io.github.lery666.pometodo",
   "build": {
     "beforeDevCommand": "corepack pnpm dev",
     "beforeBuildCommand": "corepack pnpm build",

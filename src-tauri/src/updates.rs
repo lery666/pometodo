@@ -231,6 +231,15 @@ pub async fn pometodo_check_update(state: State<'_, UpdateState>) -> Result<Upda
             release: None,
         });
     }
+    // 本衍生版本已断开上游更新渠道（见 distribution.rs），直接返回无更新。
+    if MANIFEST_URL.is_empty() {
+        return Ok(UpdateCheck {
+            current_version: current,
+            channel: UPDATE_CHANNEL,
+            available: false,
+            release: None,
+        });
+    }
     // A failed new check must not leave an earlier server snapshot actionable.
     *state.manifest.lock().map_err(|_| "无法读取更新状态")? = None;
     *state.ready.lock().map_err(|_| "无法读取更新状态")? = None;

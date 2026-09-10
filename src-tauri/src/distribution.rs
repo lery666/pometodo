@@ -11,11 +11,11 @@ pub const UPDATE_CHANNEL: &str = if OFFICIAL_SERVICES {
 } else {
     "byok"
 };
-pub const MANIFEST_URL: &str = if OFFICIAL_SERVICES {
-    "https://www.shiliux.com/downloads/pometodo/latest/release.json"
-} else {
-    "https://www.shiliux.com/downloads/pometodo/byok/latest/release.json"
-};
+// 本仓库是 ShiliuX-Team/pometodo 的衍生版本，已断开上游官方更新渠道：
+// 空字符串表示不检查更新，避免把用户引导去安装官方版本。
+// 若你需要自建更新渠道：改成自己的 release.json 地址，并同步修改
+// updates.rs 中 allowed_download_url 的域名白名单与 DOWNLOAD_PATH。
+pub const MANIFEST_URL: &str = "";
 pub const DOWNLOAD_PATH: &str = if OFFICIAL_SERVICES {
     "/downloads/pometodo/releases/"
 } else {
